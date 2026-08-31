@@ -137,15 +137,16 @@ integration/android-bridge.sh        allowlisted Android API/intent client
 Профиль `FEDORA_MEMORY_PROFILE=auto` выбирает консервативный `low` при
 обнаружении примерно 12 GiB host RAM. Он сохраняет GNOME/Wayland, не запускает
 необязательные `gnome-settings-daemon`, terminal, WirePlumber, pipewire-pulse,
-keyring и Tracker indexing, но оставляет небольшой PipeWire display transport:
-Mutter Devkit использует его для передачи изображения даже при выключенном
-звуке. Также ограничивается glibc arena growth и выключаются анимации. Для
-nested Mutter автоматически выбирается виртуальный режим 2560×1600, уменьшая
-compositor/Xwayland buffers; физическое Android-разрешение не изменяется. Это
-экономит RAM и заряд без попытки подменить Android memory manager. Перед
-запуском GNOME supervisor проверяет не только наличие PipeWire socket, но и
-реальное подключение native client через `pw-cli`; это предотвращает ложную
-готовность и последующий чёрный экран после падения Mutter Devkit.
+keyring, Tracker indexing и Evolution/GOA calendar helpers, но оставляет
+изолированный небольшой PipeWire display transport: Mutter Devkit использует
+его для передачи изображения даже при выключенном звуке. Также ограничивается
+glibc arena growth, выключаются анимации и в low-профиле не запускается
+внутренний Xwayland. Для nested Mutter автоматически выбирается виртуальный
+режим 2048×1280, уменьшая compositor buffers; физическое Android-разрешение не
+изменяется. Это экономит RAM и заряд без попытки подменить Android memory
+manager. Перед запуском GNOME supervisor проверяет не только наличие PipeWire
+socket, но и реальное подключение native client через `pw-cli`; при сбое
+изолированной конфигурации есть однократный fallback на Fedora default.
 
 Включить конкретную возможность можно отдельно:
 
@@ -163,6 +164,11 @@ FEDORA_AUDIO_MODE=on FEDORA_SETTINGS_DAEMON=on \
 ```bash
 FEDORA_NESTED_MODE_SPECS=2960x1848 FEDORA_MEMORY_PROFILE=low ./scripts/start.sh
 ```
+
+Для отладки необязательные ограничения можно включить точечно:
+`FEDORA_NESTED_XWAYLAND=on`, `FEDORA_CALENDAR_MODE=on` или
+`FEDORA_DEVKIT_PIPEWIRE_CONFIG=off`. Последний вариант возвращает обычную
+Fedora PipeWire-конфигурацию и нужен только для A/B-проверки.
 
 Linux swap не создаётся: zram/swap и reclaim принадлежат Android kernel.
 

@@ -10,12 +10,14 @@ fedora_sync_guest_config() {
   fedora_pd_login_root /usr/bin/install -d -m 0755 \
     /etc/profile.d \
     /etc/dconf/db/fedora-shell.d \
+    /etc/fedora-shell \
     /usr/local/bin || return 1
 
   fedora_pd_copy_to "$install_root/fedora/gnome/fedora-session" /usr/local/bin/fedora-session || return 1
   fedora_pd_copy_to "$install_root/fedora/gnome/fedora-run" /usr/local/bin/fedora-run || return 1
   fedora_pd_copy_to "$install_root/fedora/config/gnome-environment.sh" /etc/profile.d/fedora-shell-environment.sh || return 1
   fedora_pd_copy_to "$install_root/fedora/config/dconf.ini" /etc/dconf/db/fedora-shell.d/00-fedorashell || return 1
+  fedora_pd_copy_to "$install_root/fedora/gnome/pipewire-devkit.conf" /etc/fedora-shell/pipewire-devkit.conf || return 1
   fedora_pd_copy_to "$install_root/gpu/scripts/check-renderer.sh" /usr/local/bin/fedora-gpu-check || return 1
   fedora_pd_copy_to "$install_root/gpu/scripts/measure-frame-pacing-guest.sh" /usr/local/bin/fedora-frame-pacing || return 1
 
@@ -24,6 +26,7 @@ fedora_sync_guest_config() {
     /usr/local/bin/fedora-run \
     /usr/local/bin/fedora-gpu-check \
     /usr/local/bin/fedora-frame-pacing || return 1
+  fedora_pd_login_root /bin/chmod 0644 /etc/fedora-shell/pipewire-devkit.conf || return 1
 
   fedora_pd_login_root /bin/bash "$FEDORA_GUEST_PROJECT_ROOT/fedora/gnome/install-integration.sh" || return 1
   fedora_pd_login_root /bin/bash -c 'command -v dconf >/dev/null 2>&1 && dconf update || true'

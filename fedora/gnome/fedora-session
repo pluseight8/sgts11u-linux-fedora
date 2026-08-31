@@ -9,10 +9,13 @@ FEDORA_SESSION_RUNTIME="${FEDORA_SESSION_RUNTIME:-/tmp/fedora-runtime}"
 FEDORA_DISPLAY="${DISPLAY:-:0}"
 FEDORA_NESTED_SCALE="${FEDORA_NESTED_SCALE:-1}"
 FEDORA_NESTED_MODE="${FEDORA_NESTED_MODE:-auto}"
+FEDORA_NESTED_XWAYLAND="${FEDORA_NESTED_XWAYLAND:-auto}"
 FEDORA_DEVKIT_GDK_BACKEND="${FEDORA_DEVKIT_GDK_BACKEND:-x11}"
 FEDORA_DEVKIT_PIPEWIRE="${FEDORA_DEVKIT_PIPEWIRE:-auto}"
+FEDORA_DEVKIT_PIPEWIRE_CONFIG="${FEDORA_DEVKIT_PIPEWIRE_CONFIG:-/etc/fedora-shell/pipewire-devkit.conf}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
 FEDORA_PORTAL_MODE="${FEDORA_PORTAL_MODE:-auto}"
+FEDORA_CALENDAR_MODE="${FEDORA_CALENDAR_MODE:-auto}"
 FEDORA_MEMORY_PROFILE="${FEDORA_MEMORY_PROFILE:-balanced}"
 FEDORA_AUDIO_MODE="${FEDORA_AUDIO_MODE:-auto}"
 FEDORA_SETTINGS_DAEMON="${FEDORA_SETTINGS_DAEMON:-auto}"
@@ -62,9 +65,9 @@ configure_memory_profile() {
   # monitor used by nested Mutter, reducing compositor/Xwayland buffers while
   # keeping the panel's aspect ratio. An explicit mode spec always wins.
   if [[ -z "${FEDORA_NESTED_MODE_SPECS:-}" ]]; then
-    FEDORA_NESTED_MODE_SPECS=2560x1600
+    FEDORA_NESTED_MODE_SPECS=2048x1280
     export FEDORA_NESTED_MODE_SPECS
-    session_log "Low-memory profile uses a 2560x1600 virtual monitor; set FEDORA_NESTED_MODE_SPECS to override"
+    session_log "Low-memory profile uses a 2048x1280 virtual monitor; set FEDORA_NESTED_MODE_SPECS to override"
   fi
 }
 configure_memory_profile
@@ -84,6 +87,19 @@ portal_mode_disables_autostart() {
   esac
 }
 
+calendar_services_disabled() {
+  case "$FEDORA_CALENDAR_MODE" in
+    off|disabled|none) return 0 ;;
+    on|enabled) return 1 ;;
+    auto) [[ "$FEDORA_MEMORY_PROFILE" == low ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+session_bus_overrides_needed() {
+  portal_mode_disables_autostart || calendar_services_disabled
+}
+
 make_no_portal_dbus_config() {
   local config_path="$FEDORA_SESSION_RUNTIME/dbus-session-no-portals.conf"
   local service_dir="$FEDORA_SESSION_RUNTIME/dbus-services"
@@ -92,9 +108,11 @@ make_no_portal_dbus_config() {
   # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection, but
   # GNOME Shell and Mutter Devkit can still request portal names directly. Put
   # cheap project-owned failing service stubs before the standard service
-  # directories. Do not add a broad D-Bus deny policy: it turns an optional
-  # portal lookup into AccessDenied and makes Mutter/GDK noisier than the
-  # normal ServiceUnknown/activation-failed result.
+  # directories. The low profile also suppresses calendar/online-account
+  # activation, which otherwise starts Evolution Data Server and GOA even
+  # though a PRoot guest has no useful system services for them. Do not add a
+  # broad D-Bus deny policy: it turns optional lookups into AccessDenied and
+  # makes Mutter/GDK noisier than a normal activation failure.
   mkdir -p "$service_dir"
   local service_name
   for service_name in \
@@ -102,7 +120,37 @@ make_no_portal_dbus_config() {
     org.freedesktop.portal.Documents \
     org.freedesktop.impl.portal.PermissionStore \
     org.freedesktop.impl.portal.desktop.gnome \
-    org.freedesktop.impl.portal.desktop.gtk; do
+    org.freedesktop.impl.portal.desktop.gtk \
+    org.gnome.Shell.CalendarServer \
+    org.gnome.OnlineAccounts \
+    org.gnome.Identity \
+    org.gnome.evolution.dataserver.Sources5 \
+    org.gnome.evolution.dataserver.Calendar8 \
+    org.gnome.evolution.dataserver.AddressBook10; do
+    rm -f -- "$service_dir/$service_name.service"
+  done
+  local -a service_names=()
+  if portal_mode_disables_autostart; then
+    service_names+=(
+      org.freedesktop.portal.Desktop
+      org.freedesktop.portal.Documents
+      org.freedesktop.impl.portal.PermissionStore
+      org.freedesktop.impl.portal.desktop.gnome
+      org.freedesktop.impl.portal.desktop.gtk
+    )
+  fi
+  if calendar_services_disabled; then
+    service_names+=(
+      org.gnome.Shell.CalendarServer
+      org.gnome.OnlineAccounts
+      org.gnome.Identity
+      org.gnome.evolution.dataserver.Sources5
+      org.gnome.evolution.dataserver.Calendar8
+      org.gnome.evolution.dataserver.AddressBook10
+    )
+  fi
+  ((${#service_names[@]} > 0)) || return 1
+  for service_name in "${service_names[@]}"; do
     {
       printf '[D-BUS Service]\n'
       printf 'Name=%s\n' "$service_name"
@@ -131,16 +179,17 @@ if [[ "${1:-}" != --inside-dbus ]]; then
   command -v dbus-run-session >/dev/null 2>&1 || session_die "dbus-run-session is missing"
   export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
   dbus_args=()
-  if portal_mode_disables_autostart; then
+  if session_bus_overrides_needed; then
     if dbus_config_path="$(make_no_portal_dbus_config || true)" && [[ -n "$dbus_config_path" ]]; then
       dbus_args+=("--config-file=$dbus_config_path")
     else
-      session_log "Could not build the no-portal D-Bus policy; client-side portal guards remain active"
+      session_log "Could not build the optional-service D-Bus overrides; client-side guards remain active"
     fi
   fi
   exec dbus-run-session "${dbus_args[@]}" -- "$0" --inside-dbus "$@"
 fi
 shift
+: > "$FEDORA_SESSION_LOG"
 
 # GNOME 50+ creates a Gio.DBus.system proxy during Shell startup. A PRoot
 # guest has no Android/systemd system bus, but it does have the private bus
@@ -160,6 +209,7 @@ export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
 export PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
 export PIPEWIRE_REMOTE="pipewire-0"
 export PIPEWIRE_CORE="pipewire-0"
+export FEDORA_DEVKIT_PIPEWIRE_CONFIG
 export XDG_CURRENT_DESKTOP="GNOME"
 export XDG_SESSION_DESKTOP="gnome"
 if [[ "$FEDORA_NESTED_MODE" == x11 ]]; then
@@ -180,6 +230,18 @@ session_option_enabled() {
     off|disabled|none|0|false|no) return 1 ;;
     auto) [[ "$FEDORA_MEMORY_PROFILE" != low ]] ;;
     *) return 1 ;;
+  esac
+}
+
+nested_xwayland_enabled() {
+  case "$FEDORA_NESTED_XWAYLAND" in
+    on|enabled|1|true|yes) return 0 ;;
+    off|disabled|none|0|false|no) return 1 ;;
+    auto) [[ "$FEDORA_MEMORY_PROFILE" != low ]] ;;
+    *)
+      session_log "Unknown FEDORA_NESTED_XWAYLAND=$FEDORA_NESTED_XWAYLAND; disabling inner Xwayland for safety"
+      return 1
+      ;;
   esac
 }
 
@@ -223,11 +285,12 @@ configure_search_mode() {
   esac
 }
 
-session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE"
+session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE calendar=$FEDORA_CALENDAR_MODE xwayland=$FEDORA_NESTED_XWAYLAND"
 configure_search_mode
 
 child_pids=()
 pipewire_pid=""
+pipewire_config_path=""
 pipewire_pid_file="$FEDORA_SESSION_RUNTIME/pipewire.pid"
 
 pipewire_process_alive() {
@@ -264,6 +327,25 @@ remove_stale_pipewire_state() {
     "$FEDORA_SESSION_RUNTIME/pipewire-0.lock" \
     "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" \
     "$FEDORA_SESSION_RUNTIME/pipewire-0-manager.lock"
+}
+
+stop_pipewire_process() {
+  local pid="$pipewire_pid"
+  local tries=0
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  if pipewire_process_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    while pipewire_process_alive "$pid" && (( tries < 20 )); do
+      sleep 0.1
+      ((tries += 1))
+    done
+    if pipewire_process_alive "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  wait "$pid" 2>/dev/null || true
+  pipewire_pid=""
+  rm -f -- "$pipewire_pid_file"
 }
 
 cleanup() {
@@ -344,7 +426,25 @@ start_minimal_pipewire_for_devkit() {
         session_log "PipeWire native client probe is missing; install pipewire-utils in the Fedora container"
         return 1
       }
-      start_optional pipewire
+      pipewire_config_path=""
+      case "$FEDORA_DEVKIT_PIPEWIRE_CONFIG" in
+        off|disabled|none)
+          session_log "Using Fedora's default PipeWire configuration"
+          ;;
+        *)
+          if [[ -r "$FEDORA_DEVKIT_PIPEWIRE_CONFIG" ]]; then
+            pipewire_config_path="$FEDORA_DEVKIT_PIPEWIRE_CONFIG"
+            session_log "Using isolated Devkit PipeWire configuration: $pipewire_config_path"
+          else
+            session_log "Isolated Devkit PipeWire configuration is missing: $FEDORA_DEVKIT_PIPEWIRE_CONFIG; using Fedora's default"
+          fi
+          ;;
+      esac
+      if [[ -n "$pipewire_config_path" ]]; then
+        start_optional pipewire -c "$pipewire_config_path"
+      else
+        start_optional pipewire
+      fi
       ;;
     *)
       session_log "Unknown FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE; skipping minimal PipeWire display transport"
@@ -362,12 +462,14 @@ pipewire_client_probe() {
       XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
       PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
       PIPEWIRE_REMOTE="$PIPEWIRE_REMOTE" \
+      PIPEWIRE_CORE="$PIPEWIRE_CORE" \
       pw-cli -r "$PIPEWIRE_REMOTE" info 0 > "$probe_log" 2>&1
   else
     env \
       XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
       PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
       PIPEWIRE_REMOTE="$PIPEWIRE_REMOTE" \
+      PIPEWIRE_CORE="$PIPEWIRE_CORE" \
       pw-cli -r "$PIPEWIRE_REMOTE" info 0 > "$probe_log" 2>&1
   fi
 }
@@ -434,7 +536,18 @@ start_audio_stack() {
       start_minimal_pipewire_for_devkit
       ;;
   esac
-  wait_for_pipewire
+  if wait_for_pipewire; then
+    return 0
+  fi
+  if [[ -n "$pipewire_config_path" ]]; then
+    session_log "Isolated Devkit PipeWire server did not pass the native probe; retrying once with Fedora's default configuration"
+    stop_pipewire_process
+    remove_stale_pipewire_state
+    pipewire_config_path=""
+    start_optional pipewire
+    wait_for_pipewire && return 0
+  fi
+  return 1
 }
 remove_stale_pipewire_state
 if ! start_audio_stack; then
@@ -679,6 +792,10 @@ run_wayland_devkit() {
   before_viewer="$(process_ids_by_name mutter-devkit)"
   session_log "Starting GNOME Shell Wayland through Mutter Devkit on outer DISPLAY=$DISPLAY"
   local shell_args=(--wayland --devkit)
+  if ! nested_xwayland_enabled && has_option gnome-shell --no-x11; then
+    shell_args+=(--no-x11)
+    session_log "Inner Xwayland disabled for the nested compositor (outer Termux:X11 viewer remains enabled)"
+  fi
   if has_option gnome-shell --sm-disable; then
     shell_args+=(--sm-disable)
   fi
@@ -788,6 +905,10 @@ run_wayland_nested() {
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
   session_log "Starting GNOME Shell nested Wayland on outer DISPLAY=$DISPLAY"
   local shell_args=(--nested --wayland)
+  if ! nested_xwayland_enabled && has_option gnome-shell --no-x11; then
+    shell_args+=(--no-x11)
+    session_log "Inner Xwayland disabled for the nested compositor (outer Termux:X11 viewer remains enabled)"
+  fi
   if has_option gnome-shell --sm-disable; then
     shell_args+=(--sm-disable)
   fi

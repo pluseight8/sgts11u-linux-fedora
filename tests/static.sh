@@ -110,7 +110,9 @@ if ! grep -Fq 'fedora_resolve_memory_profile' "$root/scripts/lib/common.sh" \
   || ! grep -Fq 'FEDORA_MEMORY_PROFILE' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'MALLOC_ARENA_MAX' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'MALLOC_TRIM_THRESHOLD_' "$root/fedora/gnome/fedora-session" \
-  || ! grep -Fq '2560x1600' "$root/fedora/gnome/fedora-session"; then
+  || ! grep -Fq '2048x1280' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'FEDORA_NESTED_XWAYLAND' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'calendar_services_disabled' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'low-memory profile support is missing' >&2
   status=1
 fi
@@ -150,6 +152,21 @@ if ! grep -Fq 'Starting minimal PipeWire display transport' "$root/fedora/gnome/
   || ! grep -Fq 'pipewire-0.lock' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'PipeWire native display transport is unavailable' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'Mutter Devkit PipeWire/viewer health guards are missing' >&2
+  status=1
+fi
+if [[ ! -r "$root/fedora/gnome/pipewire-devkit.conf" ]] \
+  || ! grep -Fq 'core.name = pipewire-0' "$root/fedora/gnome/pipewire-devkit.conf" \
+  || ! grep -Fq 'libpipewire-module-client-node' "$root/fedora/gnome/pipewire-devkit.conf" \
+  || ! grep -Fq 'libpipewire-module-access' "$root/fedora/gnome/pipewire-devkit.conf" \
+  || ! grep -Fq 'pipewire-devkit.conf' "$root/scripts/lib/guest-config.sh" \
+  || ! grep -Fq 'FEDORA_DEVKIT_PIPEWIRE_CONFIG' "$root/scripts/start.sh"; then
+  printf '%s\n' 'isolated Mutter Devkit PipeWire configuration is missing' >&2
+  status=1
+fi
+if ! grep -Fq -- '--no-x11' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'FEDORA_CALENDAR_MODE' "$root/scripts/install.sh" \
+  || ! grep -Fq 'PIPEWIRE_CORE=pipewire-0' "$root/scripts/start.sh"; then
+  printf '%s\n' 'low-memory nested compositor safeguards are missing' >&2
   status=1
 fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \

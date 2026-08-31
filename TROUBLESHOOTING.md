@@ -104,12 +104,12 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
    Полный звук при этом остаётся выключенным.
 
    Если в журнале есть `PipeWire display transport is ready`, а затем
-   `mutter-devkit: Failed to connect pipewire context`, это был ложный health
-   check старых версий: наличие `pipewire-0-manager` ещё не означает, что
-   обычный клиентский сокет принимает подключения. После обновления проекта
-   installer добавляет `pipewire-utils`, проверяет реальное подключение через
-   `pw-cli`, фиксирует `PIPEWIRE_RUNTIME_DIR`/`PIPEWIRE_REMOTE` и удаляет
-   зависшие сокеты перед новым запуском. Обновите установленное дерево так:
+   `mutter-devkit: Failed to connect pipewire context`, обновите установленное
+   дерево: новая версия использует отдельную конфигурацию PipeWire только для
+   Devkit, добавляет `pipewire-utils`, проверяет реальное подключение через
+   `pw-cli`, фиксирует `PIPEWIRE_RUNTIME_DIR`/`PIPEWIRE_REMOTE`/`PIPEWIRE_CORE`
+   и удаляет зависшие сокеты перед новым запуском. При ошибке изолированной
+   конфигурации выполняется один проверенный fallback на Fedora default:
 
    ```bash
    cd "$HOME/fedora-galaxy"
@@ -125,6 +125,8 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
    FEDORA_GPU_MODE=software \
    FEDORA_AUDIO_MODE=off \
    FEDORA_PORTAL_MODE=off \
+   FEDORA_NESTED_XWAYLAND=off \
+   FEDORA_CALENDAR_MODE=off \
    "$HOME/.local/share/fedora-shell/scripts/start.sh" --legacy-drawing
    ```
 
@@ -230,9 +232,10 @@ wrapper остаётся experimental.
 ```
 
 На 12 GiB `auto` выбирает `low`: terminal, WirePlumber, pipewire-pulse, keyring,
-Tracker и settings daemon не стартуют автоматически, а минимальный PipeWire
-display transport остаётся для Mutter Devkit. Nested monitor обычно работает в
-2560×1600. Это ожидаемая оптимизация. Включайте только то, что нужно для
+Tracker, settings daemon и Evolution/GOA calendar helpers не стартуют
+автоматически, а изолированный минимальный PipeWire display transport остаётся
+для Mutter Devkit. Внутренний Xwayland отключён, а nested monitor обычно
+работает в 2048×1280. Это ожидаемая оптимизация. Включайте только то, что нужно для
 текущей задачи:
 
 ```bash

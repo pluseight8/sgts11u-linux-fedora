@@ -93,7 +93,7 @@ process_memory_snapshot() {
   while read -r pid rss args; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     case "$args" in
-      *gnome-shell*|*mutter-devkit*|*ptyxis*|*gnome-console*|*gnome-settings-daemon*|*pipewire*|*wireplumber*|*xdg-desktop-portal*|*localsearch*|*tracker*) ;;
+      *gnome-shell*|*mutter-devkit*|*ptyxis*|*gnome-console*|*gnome-settings-daemon*|*pipewire*|*wireplumber*|*xdg-desktop-portal*|*localsearch*|*tracker*|*goa*|*evolution*|*calendar-server*) ;;
       *) continue ;;
     esac
     pss="$(awk '/^Pss:/ { print $2; exit }' "/proc/$pid/smaps_rollup" 2>/dev/null || true)"
@@ -185,12 +185,19 @@ guest_process_evidence() {
     /bin/bash -c '
       printf "%s\n" "guest_processes="
       ps -eo pid=,stat=,comm=,args= 2>/dev/null \
-        | grep -E "gnome-shell|mutter-devkit|pipewire|wireplumber|xdg-desktop-portal" \
+        | grep -E "gnome-shell|mutter-devkit|pipewire|wireplumber|xdg-desktop-portal|goa|evolution|calendar-server" \
         || true
+      printf "%s\n" "devkit_pipewire_config="
+      if [[ -r /etc/fedora-shell/pipewire-devkit.conf ]]; then
+        printf "%s\n" "present"
+      else
+        printf "%s\n" "missing"
+      fi
       printf "%s\n" "pipewire_client_probe="
       XDG_RUNTIME_DIR=/tmp/fedora-runtime \
       PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime \
       PIPEWIRE_REMOTE=pipewire-0 \
+      PIPEWIRE_CORE=pipewire-0 \
         pw-cli -r pipewire-0 info 0 2>&1 || true
     '
 }
@@ -234,6 +241,7 @@ fi
   printf 'launch_terminal=%s\n' "$FEDORA_LAUNCH_TERMINAL"
   printf 'keyring_mode=%s\n' "$FEDORA_KEYRING_MODE"
   printf 'search_mode=%s\n' "$FEDORA_SEARCH_MODE"
+  printf 'calendar_mode=%s\n' "$FEDORA_CALENDAR_MODE"
   printf 'selinux=%s\n' "$selinux_state"
   printf 'display=%s\n' "$FEDORA_DISPLAY"
   printf 'peak_refresh_rate=%s\n' "$(android_setting system peak_refresh_rate)"
@@ -248,8 +256,10 @@ fi
   printf 'virgl_server=%s\n' "$virgl_installed"
   printf 'gpu_mode=%s\n' "$FEDORA_GPU_MODE"
   printf 'portal_mode=%s\n' "$FEDORA_PORTAL_MODE"
+  printf 'nested_xwayland=%s\n' "$FEDORA_NESTED_XWAYLAND"
   printf 'devkit_gdk_backend=%s\n' "$FEDORA_DEVKIT_GDK_BACKEND"
   printf 'devkit_pipewire=%s\n' "$FEDORA_DEVKIT_PIPEWIRE"
+  printf 'devkit_pipewire_config=%s\n' "$FEDORA_DEVKIT_PIPEWIRE_CONFIG"
   printf 'redacted=%s\n' "$([[ $REDACT -eq 1 ]] && echo yes || echo no)"
   printf 'state_dir=%s\n' "$FEDORA_STATE_DIR"
   printf 'install_root=%s\n' "$FEDORA_INSTALL_ROOT"

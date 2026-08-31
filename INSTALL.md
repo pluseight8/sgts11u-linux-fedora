@@ -152,9 +152,10 @@ FEDORA_PORTAL_MODE=on ./scripts/start.sh
 `FEDORA_MEMORY_PROFILE=auto` измеряет `MemTotal` и на планшете с 12 GiB
 выбирает `low`. Этот режим не удаляет GNOME и не трогает Android: он не
 запускает автоматически `gnome-settings-daemon`, terminal, WirePlumber,
-pipewire-pulse, keyring и индексатор Tracker, но оставляет минимальный PipeWire
-display transport, обязательный для Mutter Devkit. Он также ограничивает glibc
-arena growth и выбирает виртуальный nested monitor 2560×1600. Разрешение
+pipewire-pulse, keyring, Evolution/GOA calendar helpers и индексатор Tracker,
+но оставляет изолированный минимальный PipeWire display transport, обязательный
+для Mutter Devkit. Он также ограничивает glibc arena growth, отключает
+внутренний Xwayland и выбирает виртуальный nested monitor 2048×1280. Разрешение
 Android-панели от этого не меняется. Нужную функцию можно включить точечно:
 
 ```bash
