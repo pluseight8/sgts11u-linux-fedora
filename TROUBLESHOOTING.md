@@ -112,6 +112,29 @@ FEDORA_ALLOW_X11=1 ./scripts/start.sh
 
 Состояние всё равно должно оставаться `PARTIAL`, пока Wayland не восстановлен.
 
+### `gnome-shell ... Aborted` или `SIGABRT`
+
+Если Wayland-сокет создаётся, а затем появляется `Aborted`, это уже не ошибка
+выбора display mode: GNOME Shell аварийно завершился после инициализации.
+Новый supervisor оставляет причину в журнале и больше не маскирует её общим
+сообщением. Посмотрите:
+
+```bash
+tail -n 120 "$HOME/.fedora-shell/logs/fedora-session.log"
+```
+
+На устройствах без `virgl_test_server_android` штатный `auto` уже использует
+`llvmpipe`. Для явного повторного теста с минимальным числом необязательных
+служб:
+
+```bash
+FEDORA_GPU_MODE=software FEDORA_PORTAL_MODE=off ./scripts/start.sh
+```
+
+Если после этого Shell работает, оставьте software mode либо отдельно
+проверяйте virpipe через `./gpu/scripts/probe-gpu.sh`; это не считается
+аппаратным ускорением.
+
 ## Renderer = llvmpipe/softpipe/lavapipe
 
 Это software rendering. Выполните:
@@ -138,6 +161,12 @@ wrapper остаётся experimental.
 Не запускайте `systemctl` как доказательство исправности. PRoot не даёт
 настоящего PID 1/systemd и cgroups. Используйте `fedora-session`, который
 запускает конкретные user processes и D-Bus session bus.
+
+Сообщение `fuse: failed to open /dev/fuse` относится к document portal:
+Android/PRoot обычно не может предоставить FUSE mount. В `FEDORA_PORTAL_MODE=auto`
+порталы теперь пропускаются автоматически, а GNOME desktop продолжает
+запускаться. Принудительный `FEDORA_PORTAL_MODE=on` имеет смысл только после
+проверки доступности FUSE и может снова вернуть эту ошибку.
 
 ## Нет audio
 

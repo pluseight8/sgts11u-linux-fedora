@@ -10,10 +10,26 @@ FEDORA_DISPLAY="${DISPLAY:-:0}"
 FEDORA_NESTED_SCALE="${FEDORA_NESTED_SCALE:-1}"
 FEDORA_NESTED_MODE="${FEDORA_NESTED_MODE:-auto}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
+FEDORA_PORTAL_MODE="${FEDORA_PORTAL_MODE:-auto}"
 
 mkdir -p "$FEDORA_SESSION_RUNTIME" "$(dirname -- "$FEDORA_SESSION_LOG")"
 chmod 700 "$FEDORA_SESSION_RUNTIME" 2>/dev/null || true
 touch "$FEDORA_SESSION_LOG"
+
+# A crashed compositor can leave its endpoint behind. This runtime directory
+# is project-owned, and start.sh has already checked that no Fedora session is
+# running, so removing only Wayland endpoints is safe and prevents a stale
+# socket from being mistaken for the new desktop.
+remove_stale_wayland_sockets() {
+  local socket
+  for socket in \
+    "$FEDORA_SESSION_RUNTIME"/wayland-[0-9]* \
+    "$FEDORA_SESSION_RUNTIME"/wayland-[0-9]*.lock; do
+    [[ -S "$socket" || -f "$socket" ]] || continue
+    rm -f -- "$socket"
+  done
+}
+remove_stale_wayland_sockets
 
 session_log() {
   printf '[fedora-session] %s\n' "$*" | tee -a "$FEDORA_SESSION_LOG" >&2
@@ -37,6 +53,12 @@ export DISPLAY="$FEDORA_DISPLAY"
 export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
 export XDG_CURRENT_DESKTOP="GNOME"
 export XDG_SESSION_DESKTOP="gnome"
+if [[ "$FEDORA_NESTED_MODE" == x11 ]]; then
+  export XDG_SESSION_TYPE=x11
+else
+  export XDG_SESSION_TYPE=wayland
+fi
+export GNOME_SHELL_SESSION_MODE="${GNOME_SHELL_SESSION_MODE:-user}"
 export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
 export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
@@ -75,8 +97,40 @@ start_optional() {
 start_optional pipewire
 start_optional wireplumber
 start_optional pipewire-pulse
-start_optional xdg-desktop-portal
-start_optional xdg-desktop-portal-gtk
+
+portal_fuse_available() {
+  [[ -c /dev/fuse ]] || return 1
+  # Android may expose the device node while SELinux still denies opening it.
+  (exec 3<>/dev/fuse) 2>/dev/null
+}
+
+start_desktop_portals() {
+  case "$FEDORA_PORTAL_MODE" in
+    off|disabled|none)
+      export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+      session_log "Desktop portals disabled (FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE)"
+      return 0
+      ;;
+    auto)
+      if ! portal_fuse_available; then
+        export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+        session_log "Skipping xdg-desktop-portal: /dev/fuse is unavailable under Android/PRoot"
+        return 0
+      fi
+      ;;
+    on|enabled)
+      ;;
+    *)
+      export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+      session_log "Unknown FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE; desktop portals disabled"
+      return 0
+      ;;
+  esac
+  start_optional xdg-desktop-portal
+  start_optional xdg-desktop-portal-gtk
+}
+
+start_desktop_portals
 
 if command -v gnome-keyring-daemon >/dev/null 2>&1; then
   keyring_env="$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null || true)"
@@ -92,14 +146,33 @@ has_option() {
   "$command_name" --help 2>&1 | grep -Fq -- "$option"
 }
 
+report_process_exit() {
+  local label="$1"
+  local process_rc="$2"
+  session_log "$label exited with status $process_rc."
+  if (( process_rc >= 128 )); then
+    session_log "Signal: $((process_rc - 128))"
+  fi
+  if (( process_rc == 134 )); then
+    session_log "GNOME Shell reported SIGABRT; the captured tail below is the actionable crash context."
+  fi
+  session_log "Recent output from $FEDORA_SESSION_LOG:"
+  tail -n 100 "$FEDORA_SESSION_LOG" >&2 || true
+}
+
 wait_for_nested_socket() {
   local before="$1"
+  local process_pid="${2:-}"
   local tries=0
   local display_name=""
   local candidate
   while (( tries < 100 )); do
+    if [[ -n "$process_pid" ]] && ! kill -0 "$process_pid" 2>/dev/null; then
+      return 1
+    fi
     display_name="$(grep -Eo 'wayland-[0-9]+' "$FEDORA_SESSION_LOG" | tail -n 1 || true)"
-    if [[ -n "$display_name" && -S "$FEDORA_SESSION_RUNTIME/$display_name" ]]; then
+    if [[ -n "$display_name" && -S "$FEDORA_SESSION_RUNTIME/$display_name" ]] \
+      && ! grep -Fxq "$display_name" <<< "$before"; then
       printf '%s\n' "$display_name"
       return 0
     fi
@@ -154,10 +227,13 @@ run_wayland_devkit() {
     return 1
   fi
 
-  local before shell_pid nested_display
+  local before shell_pid nested_display shell_rc killed
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
   session_log "Starting GNOME Shell Wayland through Mutter Devkit on outer DISPLAY=$DISPLAY"
   local shell_args=(--wayland --devkit)
+  if has_option gnome-shell --sm-disable; then
+    shell_args+=(--sm-disable)
+  fi
   if [[ "$FEDORA_NESTED_SCALE" != 1 ]]; then
     export MUTTER_DEBUG_DUMMY_MONITOR_SCALES="$FEDORA_NESTED_SCALE"
   fi
@@ -170,10 +246,19 @@ run_wayland_devkit() {
   shell_pid="$!"
   child_pids+=("$shell_pid")
 
-  if ! nested_display="$(wait_for_nested_socket "$before")"; then
+  if ! nested_display="$(wait_for_nested_socket "$before" "$shell_pid")"; then
     session_log "GNOME Shell Devkit did not publish a Wayland socket (viewer: $devkit_path)"
-    kill "$shell_pid" 2>/dev/null || true
-    wait "$shell_pid" 2>/dev/null || true
+    killed=0
+    if kill -0 "$shell_pid" 2>/dev/null; then
+      kill "$shell_pid" 2>/dev/null || true
+      killed=1
+    fi
+    shell_rc=0
+    wait "$shell_pid" 2>/dev/null || shell_rc=$?
+    if (( ! killed && shell_rc != 0 )); then
+      report_process_exit "GNOME Shell Devkit" "$shell_rc"
+      return 125
+    fi
     return 1
   fi
   export WAYLAND_DISPLAY="$nested_display"
@@ -192,14 +277,20 @@ run_wayland_devkit() {
     child_pids+=("$!")
   fi
   launch_terminal
-  wait "$shell_pid"
+  shell_rc=0
+  wait "$shell_pid" || shell_rc=$?
+  if (( shell_rc != 0 )); then
+    report_process_exit "GNOME Shell Devkit" "$shell_rc"
+    return 125
+  fi
+  return 0
 }
 
 run_wayland_nested() {
   has_option gnome-shell --nested || return 1
   has_option gnome-shell --wayland || return 1
 
-  local before shell_pid nested_display
+  local before shell_pid nested_display shell_rc killed
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
   session_log "Starting GNOME Shell nested Wayland on outer DISPLAY=$DISPLAY"
   local shell_args=(--nested --wayland)
@@ -218,10 +309,19 @@ run_wayland_nested() {
   shell_pid="$!"
   child_pids+=("$shell_pid")
 
-  if ! nested_display="$(wait_for_nested_socket "$before")"; then
+  if ! nested_display="$(wait_for_nested_socket "$before" "$shell_pid")"; then
     session_log "GNOME Shell did not publish a nested Wayland socket"
-    kill "$shell_pid" 2>/dev/null || true
-    wait "$shell_pid" 2>/dev/null || true
+    killed=0
+    if kill -0 "$shell_pid" 2>/dev/null; then
+      kill "$shell_pid" 2>/dev/null || true
+      killed=1
+    fi
+    shell_rc=0
+    wait "$shell_pid" 2>/dev/null || shell_rc=$?
+    if (( ! killed && shell_rc != 0 )); then
+      report_process_exit "GNOME Shell nested Wayland" "$shell_rc"
+      return 125
+    fi
     return 1
   fi
   export WAYLAND_DISPLAY="$nested_display"
@@ -240,23 +340,38 @@ run_wayland_nested() {
     child_pids+=("$!")
   fi
   launch_terminal
-  wait "$shell_pid"
+  shell_rc=0
+  wait "$shell_pid" || shell_rc=$?
+  if (( shell_rc != 0 )); then
+    report_process_exit "GNOME Shell nested Wayland" "$shell_rc"
+    return 125
+  fi
+  return 0
 }
 
 run_mutter_nested() {
   command -v mutter >/dev/null 2>&1 || return 1
   has_option mutter --nested || return 1
-  local before compositor_pid nested_display
+  local before compositor_pid nested_display compositor_rc killed
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
   session_log "GNOME Shell nested option unavailable; trying Mutter Wayland transport (PARTIAL)"
   unset WAYLAND_DISPLAY
   mutter --wayland --nested >> "$FEDORA_SESSION_LOG" 2>&1 &
   compositor_pid="$!"
   child_pids+=("$compositor_pid")
-  if ! nested_display="$(wait_for_nested_socket "$before")"; then
+  if ! nested_display="$(wait_for_nested_socket "$before" "$compositor_pid")"; then
     session_log "Mutter did not publish a nested Wayland socket"
-    kill "$compositor_pid" 2>/dev/null || true
-    wait "$compositor_pid" 2>/dev/null || true
+    killed=0
+    if kill -0 "$compositor_pid" 2>/dev/null; then
+      kill "$compositor_pid" 2>/dev/null || true
+      killed=1
+    fi
+    compositor_rc=0
+    wait "$compositor_pid" 2>/dev/null || compositor_rc=$?
+    if (( ! killed && compositor_rc != 0 )); then
+      report_process_exit "Mutter nested compositor" "$compositor_rc"
+      return 125
+    fi
     return 1
   fi
   export WAYLAND_DISPLAY="$nested_display"
@@ -270,7 +385,13 @@ run_mutter_nested() {
   chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
   session_log "Desktop transport is Wayland, but GNOME Shell is not running"
   launch_terminal
-  wait "$compositor_pid"
+  compositor_rc=0
+  wait "$compositor_pid" || compositor_rc=$?
+  if (( compositor_rc != 0 )); then
+    report_process_exit "Mutter nested compositor" "$compositor_rc"
+    return 125
+  fi
+  return 0
 }
 
 run_x11_fallback() {
@@ -286,7 +407,13 @@ run_x11_fallback() {
   gnome-shell "${shell_args[@]}" >> "$FEDORA_SESSION_LOG" 2>&1 &
   local shell_pid="$!"
   child_pids+=("$shell_pid")
-  wait "$shell_pid"
+  local shell_rc=0
+  wait "$shell_pid" || shell_rc=$?
+  if (( shell_rc != 0 )); then
+    report_process_exit "GNOME Shell X11 fallback" "$shell_rc"
+    return 125
+  fi
+  return 0
 }
 
 fedora_is_true() {
@@ -300,23 +427,54 @@ case "$FEDORA_NESTED_MODE" in
   wayland|auto)
     if run_wayland_devkit; then
       exit 0
+    else
+      devkit_rc=$?
+    fi
+    if (( devkit_rc == 125 )); then
+      session_die "GNOME Shell Devkit crashed; see $FEDORA_SESSION_LOG"
     fi
     if run_wayland_nested; then
       exit 0
+    else
+      nested_rc=$?
+    fi
+    if (( nested_rc == 125 )); then
+      session_die "GNOME Shell nested Wayland crashed; see $FEDORA_SESSION_LOG"
     fi
     if [[ "$FEDORA_NESTED_MODE" == wayland ]]; then
       session_die "GNOME nested Wayland is unavailable; refusing silent X11 fallback"
     fi
     if run_mutter_nested; then
       exit 0
+    else
+      mutter_rc=$?
+    fi
+    if (( mutter_rc == 125 )); then
+      session_die "Mutter nested compositor crashed; see $FEDORA_SESSION_LOG"
     fi
     ;;
   mutter)
-    run_mutter_nested || session_die "Mutter nested Wayland is unavailable"
+    if run_mutter_nested; then
+      exit 0
+    else
+      mutter_rc=$?
+    fi
+    if (( mutter_rc == 125 )); then
+      session_die "Mutter nested compositor crashed; see $FEDORA_SESSION_LOG"
+    fi
+    session_die "Mutter nested Wayland is unavailable"
     exit 0
     ;;
   x11)
-    run_x11_fallback || session_die "explicit X11 fallback requested but unavailable"
+    if run_x11_fallback; then
+      exit 0
+    else
+      x11_rc=$?
+    fi
+    if (( x11_rc == 125 )); then
+      session_die "GNOME Shell X11 fallback crashed; see $FEDORA_SESSION_LOG"
+    fi
+    session_die "explicit X11 fallback requested but unavailable"
     exit 0
     ;;
   *)
@@ -326,6 +484,11 @@ esac
 
 if run_x11_fallback; then
   exit 0
+else
+  x11_rc=$?
+fi
+if (( x11_rc == 125 )); then
+  session_die "GNOME Shell X11 fallback crashed; see $FEDORA_SESSION_LOG"
 fi
 
 session_die "No supported GNOME display mode found. GNOME 49+ needs --devkit and mutter-devkit; see $FEDORA_SESSION_LOG"

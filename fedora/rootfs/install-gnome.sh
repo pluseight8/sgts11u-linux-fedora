@@ -105,7 +105,8 @@ install -d -m 0755 /etc/systemd/system
 cat > /etc/fedora-shell/README <<'EOF'
 This Fedora userspace runs under Android + PRoot-Distro.
 systemd is not PID 1 here. Do not use systemctl as a health check.
-fedora-session starts D-Bus, PipeWire, WirePlumber, portals and GNOME.
+fedora-session starts D-Bus, PipeWire, WirePlumber and GNOME; desktop portals
+are enabled only when their Android/PRoot FUSE prerequisite is usable.
 EOF
 chmod 0644 /etc/fedora-shell/README
 

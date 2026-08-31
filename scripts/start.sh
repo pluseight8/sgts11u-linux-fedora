@@ -128,7 +128,7 @@ ensure_virgl() {
       fedora_die "FEDORA_GPU_MODE=virpipe requested, but virgl_test_server_android is not installed."
       return 1
     fi
-    fedora_warn "virgl_test_server_android is absent; Mesa will choose its available fallback."
+    fedora_warn "virgl_test_server_android is absent; using Mesa llvmpipe software fallback for GNOME stability."
     return 0
   fi
   if [[ -f "$virgl_pid_file" ]]; then
@@ -192,21 +192,20 @@ case "$FEDORA_GPU_MODE" in
   softpipe) gpu_env+=(GALLIUM_DRIVER=softpipe LIBGL_ALWAYS_SOFTWARE=1) ;;
   zink) gpu_env+=(GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink) ;;
   auto)
+    virgl_pid=""
     if [[ -f "$virgl_pid_file" ]]; then
+      virgl_pid="$(sed -n '1p' "$virgl_pid_file" 2>/dev/null || true)"
+    fi
+    if [[ -n "$virgl_pid" ]] && fedora_pid_matches "$virgl_pid" virgl_test_server_android; then
       gpu_env+=(GALLIUM_DRIVER=virpipe)
+    else
+      # A device without the optional virgl bridge is safer with an explicit
+      # software renderer than with an unverified Android/Mesa default.
+      gpu_env+=(GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1)
     fi
     ;;
   none) ;;
 esac
-
-wayland_display=""
-if [[ -r "$session_state_host" ]]; then
-  # This file is written by the guest session and contains only shell-escaped
-  # display metadata. It is not used to execute arbitrary commands.
-  # shellcheck disable=SC1090
-  source "$session_state_host" || true
-  wayland_display="${WAYLAND_DISPLAY:-}"
-fi
 
 session_env=(
   "DISPLAY=$FEDORA_DISPLAY"
@@ -218,10 +217,8 @@ session_env=(
   "FEDORA_NESTED_SCALE=$FEDORA_NESTED_SCALE"
   "FEDORA_NESTED_MODE=$FEDORA_NESTED_MODE"
   "FEDORA_ALLOW_X11=${FEDORA_ALLOW_X11:-0}"
+  "FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE"
 )
-if [[ -n "$wayland_display" ]]; then
-  session_env+=("WAYLAND_DISPLAY=$wayland_display")
-fi
 for item in "${gpu_env[@]}"; do
   session_env+=("$item")
 done

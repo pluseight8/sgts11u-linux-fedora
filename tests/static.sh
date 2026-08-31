@@ -43,6 +43,25 @@ if ! grep -Fq -- '--devkit' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'GNOME 49+ Devkit launch path is missing' >&2
   status=1
 fi
+if ! grep -Fq 'FEDORA_PORTAL_MODE' "$root/scripts/install.sh" \
+  || ! grep -Fq 'FEDORA_PORTAL_MODE' "$root/scripts/start.sh" \
+  || ! grep -Fq 'portal_fuse_available' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'portal mode and FUSE-aware startup guard are missing' >&2
+  status=1
+fi
+if ! grep -Fq 'LIBGL_ALWAYS_SOFTWARE=1' "$root/scripts/start.sh"; then
+  printf '%s\n' 'safe software GPU fallback is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'report_process_exit' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'GNOME Shell Devkit crashed' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'GNOME crash evidence/reporting guard is missing' >&2
+  status=1
+fi
+if grep -Fq 'source "$session_state_host"' "$root/scripts/start.sh"; then
+  printf '%s\n' 'start.sh must not reuse stale Wayland session metadata' >&2
+  status=1
+fi
 
 grep -R -n --exclude-dir=.git --exclude='*.md' \
   -E '(^|[[:space:]])(setenforce[[:space:]]+0|magisk|heimdall|(^|[[:space:]])odin([[:space:]]|$))' \

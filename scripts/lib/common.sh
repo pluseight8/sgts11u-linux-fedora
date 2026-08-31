@@ -30,6 +30,7 @@ fi
 : "${FEDORA_DISPLAY:=:0}"
 : "${FEDORA_GPU_MODE:=auto}"
 : "${FEDORA_AUDIO_MODE:=auto}"
+: "${FEDORA_PORTAL_MODE:=auto}"
 : "${FEDORA_USER:=fedora}"
 : "${FEDORA_TERMUX_X11_FULLSCREEN:=1}"
 : "${FEDORA_NESTED_SCALE:=1}"

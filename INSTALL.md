@@ -111,17 +111,24 @@ battery policy могут потребовать ручной настройки
 * `--shared-tmp` и `--shared-x11` передаются PRoot;
 * `/storage/emulated/0` bind-ится как `/home/fedora/Android`, если доступен;
 * GPU mode `auto` использует `virgl_test_server_android`, если он установлен;
+  иначе принудительно выбирается стабильный Mesa `llvmpipe` software fallback;
 * для GNOME 49+ пробуется `gnome-shell --wayland --devkit`, для старых
   GNOME остаётся совместимый `gnome-shell --nested --wayland`;
+* desktop portals в режиме `auto` запускаются только при доступном `/dev/fuse`;
+  это предотвращает ошибку `xdg-document-portal` в обычном Android/PRoot;
 * pure X11 не включается автоматически.
 
 Пример явного выбора:
 
 ```bash
 FEDORA_DISPLAY=:1 FEDORA_GPU_MODE=virpipe ./scripts/start.sh
+
+# если нужен desktop portal и /dev/fuse реально доступен:
+FEDORA_PORTAL_MODE=on ./scripts/start.sh
 ```
 
-Полезные переменные описаны в `scripts/lib/common.sh` и в
+Полезные переменные (`FEDORA_GPU_MODE`, `FEDORA_PORTAL_MODE` и остальные)
+описаны в `scripts/lib/common.sh` и в
 `fedora/rootfs/image.env`.
 
 Для one-tap запуска установите Termux:Widget из того же signing source и
