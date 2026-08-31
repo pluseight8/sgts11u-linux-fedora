@@ -42,6 +42,7 @@ for fedora_config_variable in \
   FEDORA_NESTED_MODE_SPECS \
   FEDORA_TERMUX_X11_LEGACY_DRAWING \
   FEDORA_TERMUX_X11_FORCE_BGRA \
+  FEDORA_TERMUX_X11_AUTO_OPEN \
   FEDORA_CHECKOUT_ROOT \
   FEDORA_INSTALL_ROOT \
   FEDORA_SHARED_STORAGE \
@@ -85,6 +86,7 @@ unset fedora_config_override_names fedora_config_override_values \
 : "${FEDORA_NESTED_MODE_SPECS:=}"
 : "${FEDORA_TERMUX_X11_LEGACY_DRAWING:=1}"
 : "${FEDORA_TERMUX_X11_FORCE_BGRA:=0}"
+: "${FEDORA_TERMUX_X11_AUTO_OPEN:=auto}"
 : "${FEDORA_INSTALL_ROOT:=$FEDORA_USER_HOME/.local/share/fedora-shell}"
 : "${FEDORA_SHARED_STORAGE:=$FEDORA_USER_HOME/storage/shared}"
 : "${FEDORA_GUEST_PROJECT_ROOT:=/opt/fedora-shell}"

@@ -84,13 +84,38 @@ portal_mode_disables_autostart() {
 
 make_no_portal_dbus_config() {
   local config_path="$FEDORA_SESSION_RUNTIME/dbus-session-no-portals.conf"
+  local service_dir="$FEDORA_SESSION_RUNTIME/dbus-services"
   [[ -r /usr/share/dbus-1/session.conf ]] || return 1
 
   # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection, but
-  # GNOME Shell and Mutter Devkit can still request org.freedesktop.portal.*
-  # directly. Add last-wins D-Bus policy so a no-FUSE session cannot activate
-  # the portal/document services behind the supervisor's back.
-  awk '
+  # GNOME Shell and Mutter Devkit can still request portal names directly. Put
+  # cheap project-owned failing service stubs before the standard service
+  # directories, then add a deny policy. This prevents a no-FUSE session from
+  # starting xdg-desktop-portal, xdg-document-portal or a portal backend.
+  mkdir -p "$service_dir"
+  local service_name
+  for service_name in \
+    org.freedesktop.portal.Desktop \
+    org.freedesktop.portal.Documents \
+    org.freedesktop.impl.portal.PermissionStore \
+    org.freedesktop.impl.portal.desktop.gnome \
+    org.freedesktop.impl.portal.desktop.gtk; do
+    {
+      printf '[D-BUS Service]\n'
+      printf 'Name=%s\n' "$service_name"
+      printf 'Exec=/usr/bin/false\n'
+    } > "$service_dir/$service_name.service"
+  done
+  chmod 700 "$service_dir" 2>/dev/null || true
+  chmod 600 "$service_dir"/*.service 2>/dev/null || true
+
+  awk -v service_dir="$service_dir" '
+    /<busconfig>/ && !service_dir_added {
+      print
+      printf "  <servicedir>%s</servicedir>\n", service_dir
+      service_dir_added=1
+      next
+    }
     /<\/busconfig>/ && !portal_policy_added {
       print "  <policy context=\"default\">"
       print "    <deny send_destination_prefix=\"org.freedesktop.portal\"/>"

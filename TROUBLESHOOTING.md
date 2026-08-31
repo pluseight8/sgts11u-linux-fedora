@@ -72,7 +72,10 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
 1. Убедитесь, что APK Termux:X11 и package `termux-x11-nightly` одной версии и
    одного signing source.
 2. Откройте Termux:X11 вручную один раз. Автоматический `am start` может быть
-   запрещён Android 16/One UI политикой запуска background activity.
+   запрещён Android 16/One UI политикой запуска background activity; поэтому
+   `FEDORA_TERMUX_X11_AUTO_OPEN=auto` теперь распознаёт Android 12+ и не делает
+   заведомо бесполезный вызов. Для старого устройства можно явно проверить
+   автоматический путь через `FEDORA_TERMUX_X11_AUTO_OPEN=on`.
 3. Если поверхность чёрная или виден только курсор, перезапустите через
    compatibility drawing:
 

@@ -75,6 +75,12 @@ if ! grep -Fq 'TERMUX_X11_LEGACY_DRAWING' "$root/scripts/start.sh" \
   printf '%s\n' 'Termux:X11 black-screen/stale-socket recovery is missing' >&2
   status=1
 fi
+if ! grep -Fq 'FEDORA_TERMUX_X11_AUTO_OPEN' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'Android API' "$root/scripts/start.sh" \
+  || ! grep -Fq 'open the APK manually' "$root/scripts/start.sh"; then
+  printf '%s\n' 'Android background-activity-safe Termux:X11 startup is missing' >&2
+  status=1
+fi
 if ! grep -Fq 'fedora_sync_project_tree' "$root/scripts/install.sh" \
   || ! grep -Fq 'FEDORA_CHECKOUT_ROOT' "$root/scripts/update.sh"; then
   printf '%s\n' 'project checkout synchronization is missing' >&2
@@ -119,6 +125,8 @@ fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'send_destination_prefix' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq '<servicedir>' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'dbus-services' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'org.freedesktop.portal' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'PRoot D-Bus/GVFS compatibility guards are missing' >&2
   status=1

@@ -62,17 +62,44 @@ virgl_pid_file="$FEDORA_PID_DIR/virgl.pid"
 session_state_host="$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime/fedora-session-state.env"
 
 open_x11_activity() {
+  local android_api=""
   local am_bin=""
+  local am_output=""
+
+  # Android 12+ restricts background activity launches. On the target Android
+  # 16/One UI device, calling `am start` from Termux only produces a noisy
+  # SecurityException and cannot make the window visible. Opening the APK is a
+  # deliberate user action and is the reliable path. Keep an explicit `on`
+  # escape hatch for older or specially configured devices.
+  case "${FEDORA_TERMUX_X11_AUTO_OPEN:-auto}" in
+    off|disabled|none|0|false|no)
+      fedora_log "Automatic Termux:X11 activity launch disabled; open the APK manually."
+      return 0
+      ;;
+    auto)
+      android_api="$(fedora_getprop ro.build.version.sdk)"
+      if [[ "$android_api" =~ ^[0-9]+$ ]] && (( android_api >= 31 )); then
+        fedora_log "Android API $android_api restricts automatic Termux:X11 activity launch; open the APK manually."
+        return 0
+      fi
+      ;;
+    on|enabled|1|true|yes)
+      ;;
+    *)
+      fedora_warn "Unknown FEDORA_TERMUX_X11_AUTO_OPEN=${FEDORA_TERMUX_X11_AUTO_OPEN}; open Termux:X11 manually."
+      return 0
+      ;;
+  esac
+
   if [[ -x /system/bin/am ]]; then
     am_bin=/system/bin/am
   elif fedora_have_cmd am; then
     am_bin="$(command -v am)"
   fi
   if [[ -n "$am_bin" ]]; then
-    local am_output=""
     if ! am_output="$("$am_bin" start --user 0 -n com.termux.x11/com.termux.x11.MainActivity 2>&1)"; then
       am_output="$(printf '%s' "$am_output" | tr '\n' ' ')"
-      fedora_warn "Could not open Termux:X11 activity automatically: $am_output"
+      fedora_warn "Could not open Termux:X11 activity automatically: ${am_output:0:512}"
       fedora_warn "Open the Termux:X11 APK manually; its APK and Termux package must come from the same release source."
     fi
     [[ -z "$am_output" ]] || printf '[x11-activity] %s\n' "$am_output" >> "$FEDORA_LOG_FILE"
@@ -229,6 +256,7 @@ trap cleanup_transport EXIT INT TERM
 
 fedora_init_state
 ensure_x11
+fedora_log "Termux:X11 options: legacy_drawing=$LEGACY_DRAWING force_bgra=$FORCE_BGRA"
 wait_for_x11_transport
 ensure_virgl
 
