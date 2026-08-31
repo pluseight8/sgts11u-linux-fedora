@@ -122,7 +122,18 @@ if [[ -e "$TARGET_DIR" || -L "$TARGET_DIR" ]]; then
         exit 1
         ;;
     esac
-    printf 'Using existing Fedora Shell checkout: %s\n' "$TARGET_DIR"
+    current_branch="$(git -C "$TARGET_DIR" symbolic-ref --short -q HEAD || true)"
+    if [[ "$current_branch" == "$REPO_REF" ]]; then
+      if [[ -n "$(git -C "$TARGET_DIR" status --porcelain 2>/dev/null)" ]]; then
+        printf 'Existing checkout has local changes; keeping it without pull: %s\n' "$TARGET_DIR" >&2
+      else
+        printf 'Updating existing Fedora Shell checkout: %s\n' "$TARGET_DIR"
+        git -C "$TARGET_DIR" pull --ff-only
+      fi
+    else
+      printf 'Using existing checkout on branch %s; no pull performed: %s\n' \
+        "${current_branch:-detached HEAD}" "$TARGET_DIR"
+    fi
   else
     if [[ -n "$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
       printf 'Refusing to clone into a non-empty directory without Git metadata: %s\n' "$TARGET_DIR" >&2

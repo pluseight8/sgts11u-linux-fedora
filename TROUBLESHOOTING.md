@@ -38,6 +38,26 @@ pkg upgrade -y
 Do not install only `curl`, `libcurl` or `libngtcp2` in a stale Termux
 environment; Termux documents that partial upgrades are unsupported.
 
+## Fedora сообщает `No match for argument: xorg-x11-server-utils`
+
+Это старое/недоступное имя X11-пакета для Fedora 44 на ARM64, а не причина
+удалять уже созданный container. Обновите checkout и продолжите установку:
+
+```bash
+cd "$HOME/fedora-galaxy"
+git pull --ff-only
+./scripts/install.sh --yes
+```
+
+Installer больше не требует этот пакет для Wayland/GNOME. Недоступные
+дополнительные приложения GNOME пропускаются, а обязательные компоненты
+останавливают установку только при настоящей ошибке транзакции.
+
+Предупреждение PRoot о `/tmp/.X11-unix` во время установки не является
+фатальным: Termux:X11 ещё не был запущен. Перед первым запуском откройте
+Termux:X11 один раз либо используйте `./scripts/start.sh`, который запускает
+его сам.
+
 Сначала сохраните диагностику:
 
 ```bash

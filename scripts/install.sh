@@ -125,7 +125,9 @@ if ! fedora_confirm "Install/update Termux packages and the Fedora container now
   exit 1
 fi
 
+fedora_log "Updating Termux packages as one complete rolling-release transaction."
 pkg update -y
+pkg upgrade -y
 pkg install -y proot-distro termux-api
 if (( ! SKIP_X11_PACKAGE )); then
   pkg install -y x11-repo

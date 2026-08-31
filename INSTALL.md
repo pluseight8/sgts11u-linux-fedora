@@ -66,8 +66,16 @@ Installer:
 8. создаёт Termux:Widget shortcut `Fedora`;
 9. выполняет quick diagnostics.
 
-Установка существующего container не перезаписывает его автоматически. Для
-полного пересоздания используйте `./scripts/reset.sh` после backup.
+Повторный запуск безопасен: существующий container не удаляется и его данные
+сохраняются, поэтому остановившуюся установку можно просто продолжить:
+
+```bash
+cd "$HOME/fedora-galaxy"
+git pull --ff-only
+./scripts/install.sh --yes
+```
+
+Для полного пересоздания используйте `./scripts/reset.sh` только после backup.
 
 ## Флаги installer
 
@@ -79,7 +87,9 @@ Installer:
 --min-free-gib N         изменить минимальное свободное место
 ```
 
-Bootstrap поддерживает `--dir DIRECTORY`, `--ref REF`, `--no-install` и
+При повторном запуске bootstrap чистый checkout автоматически обновляется
+через `git pull --ff-only`; локальные изменения он не трогает. Bootstrap
+поддерживает `--dir DIRECTORY`, `--ref REF`, `--no-install` и
 передаёт installer-флаги `--yes`, `--allow-unknown-device`, `--enable-boot`,
 `--skip-x11-package`, `--min-free-gib N`.
 

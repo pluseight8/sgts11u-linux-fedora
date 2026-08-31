@@ -159,16 +159,19 @@ fedora_pd_copy_to() {
   "$FEDORA_PD_BIN" copy "$source" "$FEDORA_CONTAINER:$destination"
 }
 
-# Run a command inside the guest with the host's shared tmp, X11 socket and
-# the installed project tree. The helper deliberately binds only the project
-# tree and the user-granted shared storage; private Android app data is not
-# exposed through this wrapper.
+# Run a command inside the guest with the host's shared tmp, the X11 socket
+# when Termux:X11 has created it, and the installed project tree. The helper
+# deliberately binds only the project tree and the user-granted shared
+# storage; private Android app data is not exposed through this wrapper.
 fedora_pd_login_as() {
   local login_user="$1"
   shift
   fedora_require_pd
-  local -a args=(login --shared-tmp --shared-x11 --user "$login_user" \
+  local -a args=(login --shared-tmp --user "$login_user" \
     --env "FEDORA_GUEST_PROJECT_ROOT=$FEDORA_GUEST_PROJECT_ROOT")
+  if [[ -d "$FEDORA_TERMUX_PREFIX/tmp/.X11-unix" ]]; then
+    args+=(--shared-x11)
+  fi
   if [[ -d "$FEDORA_INSTALL_ROOT" ]]; then
     args+=(--bind "$FEDORA_INSTALL_ROOT:$FEDORA_GUEST_PROJECT_ROOT")
   fi

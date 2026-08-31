@@ -15,7 +15,12 @@ fi
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-dnf -y makecache
+# A single Fedora mirror can time out while the remaining repositories are
+# usable. Keep the warning visible, but let the refresh/transaction below
+# make the final decision about whether the package operation can proceed.
+if ! dnf -y makecache; then
+  printf '%s\n' 'Warning: Fedora metadata refresh was incomplete; retrying during package upgrade.' >&2
+fi
 dnf -y upgrade --refresh --setopt=install_weak_deps=False
 
 required_packages=(
@@ -46,7 +51,6 @@ required_packages=(
   xorg-x11-server-Xwayland
   xorg-x11-xauth
   xkeyboard-config
-  xorg-x11-server-utils
   vulkan-tools
   wayland-utils
 )
