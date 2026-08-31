@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Marker: fedora-shell-runner-v1
+if (( $# == 0 )); then
+  printf '%s\n' 'Usage: fedora-run COMMAND [ARG ...]' >&2
+  exit 64
+fi
+
+exec "$@"
+

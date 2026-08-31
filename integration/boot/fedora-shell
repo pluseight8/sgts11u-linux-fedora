@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+# fedora-shell-boot-v1
+set -Eeuo pipefail
+config="$HOME/.fedora-shell/config.env"
+if [[ -r "$config" ]]; then
+  # shellcheck disable=SC1090
+  source "$config"
+fi
+install_root="${FEDORA_INSTALL_ROOT:-$HOME/.local/share/fedora-shell}"
+if [[ -x "$install_root/scripts/start.sh" ]]; then
+  exec "$install_root/scripts/start.sh" --reconnect
+fi

@@ -1,0 +1,32 @@
+# Required desktop packages are installed by fedora/rootfs/install-gnome.sh.
+# This list is kept as reviewable provenance and for manual additions.
+bash
+ca-certificates
+dbus-daemon
+dbus-tools
+dconf
+fontconfig
+gnome-control-center
+gnome-keyring
+gnome-session
+gnome-settings-daemon
+gnome-shell
+gsettings-desktop-schemas
+libinput
+mesa-demos
+mesa-dri-drivers
+mesa-libEGL
+mesa-libGL
+mutter
+nautilus
+pipewire
+pipewire-pulseaudio
+wireplumber
+xdg-desktop-portal
+xdg-desktop-portal-gtk
+xorg-x11-server-Xwayland
+xorg-x11-server-utils
+xorg-x11-xauth
+xkeyboard-config
+vulkan-tools
+wayland-utils

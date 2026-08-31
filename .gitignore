@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+*.iml
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+state/
+*.log
+*.apk
+*.aab
+*.tar
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.gpg
+
