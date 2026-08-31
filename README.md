@@ -47,14 +47,15 @@ GitHub; смешивать источники нельзя), затем откр
 вариант не требует предварительно устанавливать Git:
 
 ```bash
-pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+pkg update -y && pkg upgrade -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
 ```
 
 Bootstrap устанавливает Git с `-y`, клонирует проект в
 `$HOME/fedora-galaxy` и запускает installer. Для полностью автоматического
 подтверждения Fedora installer добавьте `--yes` в конец команды bootstrap.
 
-Общий Android storage для bind/backup необязателен. Если он нужен, после
+Команда сначала обновляет весь Termux, потому что Termux не поддерживает
+частичные обновления shared libraries. Общий Android storage для bind/backup необязателен. Если он нужен, после
 bootstrap запустите отдельно и дождитесь его собственного вопроса:
 
 ```bash

@@ -28,20 +28,22 @@ Termux, Termux:X11, Termux:API, Termux:Boot и Termux:Widget должны быт
 последующими командами:
 
 ```bash
-pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+pkg update -y && pkg upgrade -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
 ```
 
 Или вручную:
 
 ```bash
 pkg update -y
+pkg upgrade -y
 pkg install -y git
 git clone https://github.com/pluseight8/sgts11u-linux-fedora.git "$HOME/fedora-galaxy"
 cd "$HOME/fedora-galaxy"
 ./scripts/install.sh
 ```
 
-`termux-setup-storage` запускайте отдельно, только если нужен доступ к общему
+`pkg upgrade -y` здесь обязателен: Termux использует rolling-release и не
+поддерживает partial upgrades. `termux-setup-storage` запускайте отдельно, только если нужен доступ к общему
 Android storage, и отвечайте `y` именно на его вопрос. `pkg install` в этой
 инструкции использует `-y`, поэтому последующая вставка команд не может быть
 принята за ответ `Y/n`.

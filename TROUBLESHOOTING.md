@@ -8,12 +8,35 @@ command. The bootstrap avoids this interaction entirely and also uses
 non-interactive `pkg` flags:
 
 ```bash
-pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+pkg update -y && pkg upgrade -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
 ```
 
 The message about selecting a Termux mirror is informational if package lists
 are fetched successfully. Use `termux-change-repo` only when the update really
 fails.
+
+## `CANNOT LINK EXECUTABLE "curl"`
+
+This means that Termux has a partial upgrade: for example, `curl`/`libcurl`
+was updated while OpenSSL or another shared dependency remained old. Repair
+the rolling-release environment before downloading anything else:
+
+```bash
+pkg update -y
+pkg upgrade -y
+curl --version
+```
+
+If the full upgrade reports broken dependencies, run the package repair once
+and repeat the upgrade:
+
+```bash
+apt --fix-broken install -y
+pkg upgrade -y
+```
+
+Do not install only `curl`, `libcurl` or `libngtcp2` in a stale Termux
+environment; Termux documents that partial upgrades are unsupported.
 
 Сначала сохраните диагностику:
 

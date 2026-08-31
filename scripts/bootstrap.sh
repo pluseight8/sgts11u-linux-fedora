@@ -92,6 +92,12 @@ command -v git >/dev/null 2>&1 || {
     printf '%s\n' 'Termux package update failed. Run termux-change-repo and retry.' >&2
     exit 1
   }
+  # Termux is rolling-release and does not support partial upgrades. Upgrade
+  # the existing environment before adding Git to avoid mixed shared libs.
+  pkg upgrade -y || {
+    printf '%s\n' 'Termux package upgrade failed. Run apt --fix-broken install -y, then retry.' >&2
+    exit 1
+  }
   pkg install -y git || {
     printf '%s\n' 'Git installation failed. Run termux-change-repo and retry.' >&2
     exit 1
