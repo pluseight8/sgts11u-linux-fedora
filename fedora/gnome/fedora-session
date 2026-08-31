@@ -437,7 +437,9 @@ start_audio_stack() {
   wait_for_pipewire
 }
 remove_stale_pipewire_state
-start_audio_stack
+if ! start_audio_stack; then
+  session_die "PipeWire native display transport is unavailable; see $FEDORA_SESSION_RUNTIME/pipewire-probe.log and $FEDORA_SESSION_LOG"
+fi
 
 start_desktop_portals() {
   case "$FEDORA_PORTAL_MODE" in

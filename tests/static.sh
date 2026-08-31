@@ -147,7 +147,8 @@ if ! grep -Fq 'Starting minimal PipeWire display transport' "$root/fedora/gnome/
   || ! grep -Fq 'pw-cli' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'PIPEWIRE_RUNTIME_DIR' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime' "$root/scripts/start.sh" \
-  || ! grep -Fq 'pipewire-0.lock' "$root/fedora/gnome/fedora-session"; then
+  || ! grep -Fq 'pipewire-0.lock' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'PipeWire native display transport is unavailable' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'Mutter Devkit PipeWire/viewer health guards are missing' >&2
   status=1
 fi
