@@ -111,7 +111,8 @@ battery policy могут потребовать ручной настройки
 * `--shared-tmp` и `--shared-x11` передаются PRoot;
 * `/storage/emulated/0` bind-ится как `/home/fedora/Android`, если доступен;
 * GPU mode `auto` использует `virgl_test_server_android`, если он установлен;
-* сначала пробуется `gnome-shell --nested --wayland`;
+* для GNOME 49+ пробуется `gnome-shell --wayland --devkit`, для старых
+  GNOME остаётся совместимый `gnome-shell --nested --wayland`;
 * pure X11 не включается автоматически.
 
 Пример явного выбора:

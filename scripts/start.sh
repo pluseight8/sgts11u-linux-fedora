@@ -97,6 +97,24 @@ ensure_x11() {
   fi
 }
 
+wait_for_x11_transport() {
+  local x11_pid x11_socket tries=0
+  x11_pid="$(sed -n '1p' "$x11_pid_file" 2>/dev/null || true)"
+  x11_socket="$FEDORA_TERMUX_PREFIX/tmp/.X11-unix/X${FEDORA_DISPLAY#:}"
+  while (( tries < 50 )); do
+    if [[ -S "$x11_socket" ]]; then
+      return 0
+    fi
+    if ! fedora_pid_matches "$x11_pid" termux-x11; then
+      fedora_die "Termux:X11 server exited before creating $x11_socket; inspect $FEDORA_LOG_DIR/termux-x11.log"
+      return 1
+    fi
+    sleep 0.1
+    ((tries += 1))
+  done
+  fedora_die "Termux:X11 socket is unavailable: $x11_socket. Install/open the compatible Termux:X11 APK, then retry."
+}
+
 ensure_virgl() {
   local mode="$FEDORA_GPU_MODE"
   case "$mode" in
@@ -152,6 +170,7 @@ trap cleanup_transport EXIT INT TERM
 
 fedora_init_state
 ensure_x11
+wait_for_x11_transport
 ensure_virgl
 
 if fedora_container_running; then

@@ -57,11 +57,16 @@ trap cleanup EXIT INT TERM
 start_optional() {
   local name="$1"
   shift
-  if ! command -v "$name" >/dev/null 2>&1; then
+  local executable=""
+  if executable="$(command -v "$name" 2>/dev/null)"; then
+    :
+  elif [[ -x "/usr/libexec/$name" ]]; then
+    executable="/usr/libexec/$name"
+  else
     session_log "optional process not installed: $name"
     return 0
   fi
-  "$name" "$@" >> "$FEDORA_SESSION_LOG" 2>&1 &
+  "$executable" "$@" >> "$FEDORA_SESSION_LOG" 2>&1 &
   child_pids+=("$!")
 }
 
@@ -112,6 +117,16 @@ wait_for_nested_socket() {
   return 1
 }
 
+mutter_devkit_path() {
+  if [[ -x /usr/libexec/mutter-devkit ]]; then
+    printf '%s\n' /usr/libexec/mutter-devkit
+  elif command -v mutter-devkit >/dev/null 2>&1; then
+    command -v mutter-devkit
+  else
+    return 1
+  fi
+}
+
 launch_terminal() {
   local terminal
   if command -v ptyxis >/dev/null 2>&1; then
@@ -126,6 +141,58 @@ launch_terminal() {
   fi
   "$terminal" >> "$FEDORA_SESSION_LOG" 2>&1 &
   child_pids+=("$!")
+}
+
+run_wayland_devkit() {
+  has_option gnome-shell --devkit || return 1
+  has_option gnome-shell --wayland || return 1
+
+  local devkit_path
+  devkit_path="$(mutter_devkit_path || true)"
+  if [[ -z "$devkit_path" ]]; then
+    session_log "GNOME Shell supports --devkit, but mutter-devkit is missing"
+    return 1
+  fi
+
+  local before shell_pid nested_display
+  before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
+  session_log "Starting GNOME Shell Wayland through Mutter Devkit on outer DISPLAY=$DISPLAY"
+  local shell_args=(--wayland --devkit)
+  if [[ "$FEDORA_NESTED_SCALE" != 1 ]]; then
+    export MUTTER_DEBUG_DUMMY_MONITOR_SCALES="$FEDORA_NESTED_SCALE"
+  fi
+  if [[ -n "${FEDORA_NESTED_MODE_SPECS:-}" ]]; then
+    export MUTTER_DEBUG_DUMMY_MODE_SPECS="$FEDORA_NESTED_MODE_SPECS"
+  fi
+
+  unset WAYLAND_DISPLAY
+  gnome-shell "${shell_args[@]}" >> "$FEDORA_SESSION_LOG" 2>&1 &
+  shell_pid="$!"
+  child_pids+=("$shell_pid")
+
+  if ! nested_display="$(wait_for_nested_socket "$before")"; then
+    session_log "GNOME Shell Devkit did not publish a Wayland socket (viewer: $devkit_path)"
+    kill "$shell_pid" 2>/dev/null || true
+    wait "$shell_pid" 2>/dev/null || true
+    return 1
+  fi
+  export WAYLAND_DISPLAY="$nested_display"
+  export XDG_SESSION_TYPE=wayland
+  {
+    printf 'WAYLAND_DISPLAY=%q\n' "$WAYLAND_DISPLAY"
+    printf 'XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
+    printf 'XDG_SESSION_TYPE=%q\n' "$XDG_SESSION_TYPE"
+    printf 'DISPLAY=%q\n' "$DISPLAY"
+  } > "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
+  chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
+  session_log "Desktop session: Wayland ($WAYLAND_DISPLAY) via Mutter Devkit; transport: X11 ($DISPLAY)"
+
+  if command -v gnome-settings-daemon >/dev/null 2>&1; then
+    gnome-settings-daemon --replace >> "$FEDORA_SESSION_LOG" 2>&1 &
+    child_pids+=("$!")
+  fi
+  launch_terminal
+  wait "$shell_pid"
 }
 
 run_wayland_nested() {
@@ -153,6 +220,8 @@ run_wayland_nested() {
 
   if ! nested_display="$(wait_for_nested_socket "$before")"; then
     session_log "GNOME Shell did not publish a nested Wayland socket"
+    kill "$shell_pid" 2>/dev/null || true
+    wait "$shell_pid" 2>/dev/null || true
     return 1
   fi
   export WAYLAND_DISPLAY="$nested_display"
@@ -186,6 +255,8 @@ run_mutter_nested() {
   child_pids+=("$compositor_pid")
   if ! nested_display="$(wait_for_nested_socket "$before")"; then
     session_log "Mutter did not publish a nested Wayland socket"
+    kill "$compositor_pid" 2>/dev/null || true
+    wait "$compositor_pid" 2>/dev/null || true
     return 1
   fi
   export WAYLAND_DISPLAY="$nested_display"
@@ -227,6 +298,9 @@ fedora_is_true() {
 
 case "$FEDORA_NESTED_MODE" in
   wayland|auto)
+    if run_wayland_devkit; then
+      exit 0
+    fi
     if run_wayland_nested; then
       exit 0
     fi
@@ -254,4 +328,4 @@ if run_x11_fallback; then
   exit 0
 fi
 
-session_die "No supported GNOME display mode found. See $FEDORA_SESSION_LOG"
+session_die "No supported GNOME display mode found. GNOME 49+ needs --devkit and mutter-devkit; see $FEDORA_SESSION_LOG"

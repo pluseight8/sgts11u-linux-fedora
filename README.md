@@ -29,7 +29,7 @@ Termux + Termux:X11 (транспортный слой)
         ↓ shared tmp, без root
 PRoot-Distro → официальный Fedora ARM64 image (fedora:44)
         ↓ session supervisor + D-Bus
-GNOME Shell / Mutter --nested --wayland
+GNOME Shell --wayland --devkit
         ↓ основной desktop протокол
 Wayland-native GNOME applications
         ↘ XWayland только для legacy X11 applications
@@ -37,7 +37,8 @@ Wayland-native GNOME applications
 
 Termux:X11 в этой схеме — только display transport. Наличие X11-транспорта не
 означает, что сессия GNOME работает как X11 desktop. Скрипт запуска сначала
-проверяет nested Wayland GNOME; X11 fallback возможен только с явным
+проверяет Wayland через Mutter Devkit (либо старый nested режим на старом
+GNOME); X11 fallback возможен только с явным
 `FEDORA_ALLOW_X11=1`.
 
 ## Быстрый старт на планшете

@@ -18,6 +18,7 @@ mesa-dri-drivers
 mesa-libEGL
 mesa-libGL
 mutter
+mutter-devkit
 nautilus
 pipewire
 pipewire-pulseaudio

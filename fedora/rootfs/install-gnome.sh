@@ -42,6 +42,7 @@ required_packages=(
   mesa-libEGL
   mesa-libGL
   mutter
+  mutter-devkit
   nautilus
   pipewire
   pipewire-pulseaudio

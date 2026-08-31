@@ -92,9 +92,18 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
 ./scripts/diagnostics.sh --fedora
 ```
 
-`gnome-shell --nested --wayland` зависит от версии GNOME. Если option удалён,
-это blocker nested target, а не повод silently объявить X11 рабочим. Сначала
-зафиксируйте лог, проверьте upstream GNOME/Mutter и только затем временно
+`gnome-shell --nested --wayland` зависит от версии GNOME. В GNOME 49+ этот
+option удалён, и нужен Mutter Devkit:
+
+```bash
+cd "$HOME/fedora-galaxy"
+./scripts/install.sh --yes
+```
+
+Современный путь — `gnome-shell --wayland --devkit`; пакет `mutter-devkit`
+устанавливается автоматически. Это всё ещё Wayland desktop, показанный через
+внешний Termux:X11 transport. Если Devkit тоже не стартует, зафиксируйте лог,
+проверьте upstream GNOME/Mutter и только затем временно
 используйте:
 
 ```bash

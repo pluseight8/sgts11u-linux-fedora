@@ -31,6 +31,19 @@ if command -v xmllint >/dev/null 2>&1; then
   xmllint --noout "$root/android/app/src/main/AndroidManifest.xml" || status=1
 fi
 
+if ! grep -Fxq 'mutter-devkit' "$root/fedora/packages/gnome-packages.txt"; then
+  printf '%s\n' 'mutter-devkit must remain in the Fedora GNOME package manifest' >&2
+  status=1
+fi
+if grep -Fxq 'xorg-x11-server-utils' "$root/fedora/packages/gnome-packages.txt"; then
+  printf '%s\n' 'unavailable xorg-x11-server-utils must not be a required package' >&2
+  status=1
+fi
+if ! grep -Fq -- '--devkit' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'GNOME 49+ Devkit launch path is missing' >&2
+  status=1
+fi
+
 grep -R -n --exclude-dir=.git --exclude='*.md' \
   -E '(^|[[:space:]])(setenforce[[:space:]]+0|magisk|heimdall|(^|[[:space:]])odin([[:space:]]|$))' \
   "$root/scripts" "$root/gpu" "$root/audio" "$root/input" "$root/integration" "$root/fedora" \

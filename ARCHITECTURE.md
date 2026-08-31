@@ -39,7 +39,8 @@ touchpad/simulated-touchscreen gestures. Поэтому текущий запу�
 ```text
 Android Surface
   → Termux:X11 X server window
-  → gnome-shell --nested --wayland
+  → Mutter Devkit viewer
+  → gnome-shell --wayland --devkit
   → Wayland applications
 ```
 
@@ -57,7 +58,7 @@ SHA-256 каждого слоя. Это безопаснее непровере�
 не является immutable digest: установочный отчёт сохраняет фактический
 manifest/image metadata, а `VERSIONS.md` не подменяет этот отчёт заранее.
 
-В Fedora ставятся GNOME Shell/Mutter и базовые GNOME applications. GDM, systemd
+В Fedora ставятся GNOME Shell/Mutter, Mutter Devkit и базовые GNOME applications. GDM, systemd
 PID 1 и kernel-facing services не запускаются. `fedora-session` вручную
 создаёт D-Bus session bus, запускает PipeWire/WirePlumber/portals best-effort
 и затем GNOME Shell nested.
