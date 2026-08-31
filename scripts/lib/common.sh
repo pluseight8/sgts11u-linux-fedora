@@ -117,6 +117,9 @@ fedora_requested_memory_profile="$FEDORA_MEMORY_PROFILE"
 if ! FEDORA_MEMORY_PROFILE="$(fedora_resolve_memory_profile "$fedora_requested_memory_profile")"; then
   printf '[fedora-shell][error] Unknown FEDORA_MEMORY_PROFILE=%s (use auto, low, balanced or performance).\n' \
     "$fedora_requested_memory_profile" >&2
+  # This file is both sourced by launchers and executable as a library probe;
+  # keep the direct-execution exit path explicit for both call modes.
+  # shellcheck disable=SC2317
   return 1 2>/dev/null || exit 64
 fi
 unset fedora_requested_memory_profile
