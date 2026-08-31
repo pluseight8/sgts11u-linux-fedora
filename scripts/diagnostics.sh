@@ -145,9 +145,19 @@ guest_runtime_evidence() {
   printf 'wayland_socket=%s\n' \
     "$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit 2>/dev/null | sed 's#^.*/##' || true)"
   if [[ -S "$runtime/pipewire-0" ]]; then
-    printf '%s\n' 'pipewire_socket=present'
+    printf '%s\n' 'pipewire_main_socket=present'
   else
-    printf '%s\n' 'pipewire_socket=absent'
+    printf '%s\n' 'pipewire_main_socket=absent'
+  fi
+  if [[ -S "$runtime/pipewire-0-manager" ]]; then
+    printf '%s\n' 'pipewire_manager_socket=present'
+  else
+    printf '%s\n' 'pipewire_manager_socket=absent'
+  fi
+  if [[ -r "$runtime/pipewire.pid" ]]; then
+    printf 'pipewire_pid=%s\n' "$(sed -n '1p' "$runtime/pipewire.pid" 2>/dev/null || true)"
+  else
+    printf '%s\n' 'pipewire_pid=missing'
   fi
 }
 
@@ -177,6 +187,11 @@ guest_process_evidence() {
       ps -eo pid=,stat=,comm=,args= 2>/dev/null \
         | grep -E "gnome-shell|mutter-devkit|pipewire|wireplumber|xdg-desktop-portal" \
         || true
+      printf "%s\n" "pipewire_client_probe="
+      XDG_RUNTIME_DIR=/tmp/fedora-runtime \
+      PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime \
+      PIPEWIRE_REMOTE=pipewire-0 \
+        pw-cli -r pipewire-0 info 0 2>&1 || true
     '
 }
 

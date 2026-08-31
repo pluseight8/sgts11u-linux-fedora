@@ -46,6 +46,7 @@ required_packages=(
   nautilus
   pipewire
   pipewire-pulseaudio
+  pipewire-utils
   wireplumber
   xdg-desktop-portal
   xdg-desktop-portal-gtk

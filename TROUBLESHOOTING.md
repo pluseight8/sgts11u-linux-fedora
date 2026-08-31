@@ -103,6 +103,37 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
    звук, а обязательный канал Mutter Devkit для вывода вложенного экрана.
    Полный звук при этом остаётся выключенным.
 
+   Если в журнале есть `PipeWire display transport is ready`, а затем
+   `mutter-devkit: Failed to connect pipewire context`, это был ложный health
+   check старых версий: наличие `pipewire-0-manager` ещё не означает, что
+   обычный клиентский сокет принимает подключения. После обновления проекта
+   installer добавляет `pipewire-utils`, проверяет реальное подключение через
+   `pw-cli`, фиксирует `PIPEWIRE_RUNTIME_DIR`/`PIPEWIRE_REMOTE` и удаляет
+   зависшие сокеты перед новым запуском. Обновите установленное дерево так:
+
+   ```bash
+   cd "$HOME/fedora-galaxy"
+   git pull --ff-only
+   bash ./scripts/install.sh --yes --memory-profile low
+   ```
+
+   Затем полностью откройте APK Termux:X11 вручную и запустите:
+
+   ```bash
+   FEDORA_TERMUX_X11_AUTO_OPEN=off \
+   FEDORA_MEMORY_PROFILE=low \
+   FEDORA_GPU_MODE=software \
+   FEDORA_AUDIO_MODE=off \
+   FEDORA_PORTAL_MODE=off \
+   "$HOME/.local/share/fedora-shell/scripts/start.sh" --legacy-drawing
+   ```
+
+   Если проверка PipeWire остановила запуск, причина будет в
+   `/tmp/fedora-runtime/pipewire-probe.log` внутри Fedora и в
+   `$HOME/.fedora-shell/logs/fedora-session.log` на стороне Termux. Не
+   отключайте `FEDORA_DEVKIT_PIPEWIRE` в рабочем Wayland-сеансе: Mutter Devkit
+   использует этот native PipeWire transport для показа вложенного экрана.
+
    Этот режим рекомендован upstream Termux:X11 для устройств, где обычный
    drawing даёт чёрную поверхность.
 4. Попробуйте другой display:
@@ -244,8 +275,10 @@ FEDORA_MEMORY_PROFILE=low FEDORA_NESTED_MODE_SPECS=2960x1848 ./scripts/start.sh
 Android/PRoot обычно не может предоставить FUSE mount. В
 `FEDORA_PORTAL_MODE=auto` порталы пропускаются автоматически, а
 `GIO_USE_VFS=local` предотвращает лишний GVFS. GNOME может всё ещё попытаться
-проверить portal через D-Bus, поэтому в логах допустимы `AccessDenied` или
-`ServiceUnknown`; это не должно останавливать desktop. Принудительный
+проверить portal через D-Bus; при `FEDORA_PORTAL_MODE=off` проект подставляет
+локальные неуспешные service stubs вместо запуска portal/FUSE. Поэтому
+`ServiceUnknown` или ошибка активации допустимы, но широкая D-Bus-блокировка и
+`AccessDenied` от неё не являются нормальным путём. Принудительный
 `FEDORA_PORTAL_MODE=on` имеет смысл только после
 проверки доступности FUSE и может снова вернуть эту ошибку.
 

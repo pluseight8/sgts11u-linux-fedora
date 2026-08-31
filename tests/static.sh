@@ -143,17 +143,24 @@ fi
 if ! grep -Fq 'Starting minimal PipeWire display transport' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'wait_for_devkit_viewer' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'process_ids_by_name' "$root/fedora/gnome/fedora-session" \
-  || ! grep -Fq 'FEDORA_DEVKIT_GDK_BACKEND' "$root/scripts/start.sh"; then
+  || ! grep -Fq 'FEDORA_DEVKIT_GDK_BACKEND' "$root/scripts/start.sh" \
+  || ! grep -Fq 'pw-cli' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'PIPEWIRE_RUNTIME_DIR' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime' "$root/scripts/start.sh" \
+  || ! grep -Fq 'pipewire-0.lock' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'Mutter Devkit PipeWire/viewer health guards are missing' >&2
   status=1
 fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session" \
-  || ! grep -Fq 'send_destination_prefix' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq '<servicedir>' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'dbus-services' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'org.freedesktop.portal' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'PRoot D-Bus/GVFS compatibility guards are missing' >&2
+  status=1
+fi
+if grep -Fq 'send_destination_prefix' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'portal D-Bus policy must not broadly deny GNOME/Mutter requests' >&2
   status=1
 fi
 if grep -Fq 'source "$session_state_host"' "$root/scripts/start.sh"; then

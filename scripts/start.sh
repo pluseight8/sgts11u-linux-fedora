@@ -307,6 +307,8 @@ esac
 session_env=(
   "DISPLAY=$FEDORA_DISPLAY"
   "XDG_RUNTIME_DIR=/tmp/fedora-runtime"
+  "PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime"
+  "PIPEWIRE_REMOTE=pipewire-0"
   "FEDORA_SESSION_RUNTIME=/tmp/fedora-runtime"
   "FEDORA_SESSION_LOG=/tmp/fedora-session.log"
   "FEDORA_GPU_MODE=$FEDORA_GPU_MODE"

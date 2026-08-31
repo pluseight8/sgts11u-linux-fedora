@@ -92,8 +92,9 @@ make_no_portal_dbus_config() {
   # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection, but
   # GNOME Shell and Mutter Devkit can still request portal names directly. Put
   # cheap project-owned failing service stubs before the standard service
-  # directories, then add a deny policy. This prevents a no-FUSE session from
-  # starting xdg-desktop-portal, xdg-document-portal or a portal backend.
+  # directories. Do not add a broad D-Bus deny policy: it turns an optional
+  # portal lookup into AccessDenied and makes Mutter/GDK noisier than the
+  # normal ServiceUnknown/activation-failed result.
   mkdir -p "$service_dir"
   local service_name
   for service_name in \
@@ -117,15 +118,6 @@ make_no_portal_dbus_config() {
       printf "  <servicedir>%s</servicedir>\n", service_dir
       service_dir_added=1
       next
-    }
-    /<\/busconfig>/ && !portal_policy_added {
-      print "  <policy context=\"default\">"
-      print "    <deny send_destination_prefix=\"org.freedesktop.portal\"/>"
-      print "    <deny send_destination_prefix=\"org.freedesktop.impl.portal\"/>"
-      print "    <deny own_prefix=\"org.freedesktop.portal\"/>"
-      print "    <deny own_prefix=\"org.freedesktop.impl.portal\"/>"
-      print "  </policy>"
-      portal_policy_added=1
     }
     { print }
   ' /usr/share/dbus-1/session.conf > "$config_path"
@@ -162,6 +154,12 @@ fi
 
 export DISPLAY="$FEDORA_DISPLAY"
 export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
+# Keep every PipeWire client on the project-owned native endpoint. In a PRoot
+# guest the host environment may contain a stale/foreign PIPEWIRE_REMOTE, and
+# Mutter Devkit uses the normal native socket rather than the manager socket.
+export PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
+export PIPEWIRE_REMOTE="pipewire-0"
+export PIPEWIRE_CORE="pipewire-0"
 export XDG_CURRENT_DESKTOP="GNOME"
 export XDG_SESSION_DESKTOP="gnome"
 if [[ "$FEDORA_NESTED_MODE" == x11 ]]; then
@@ -230,6 +228,44 @@ configure_search_mode
 
 child_pids=()
 pipewire_pid=""
+pipewire_pid_file="$FEDORA_SESSION_RUNTIME/pipewire.pid"
+
+pipewire_process_alive() {
+  local pid="$1"
+  local process_name=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/$pid/comm" ]]; then
+    process_name="$(<"/proc/$pid/comm")"
+    [[ "$process_name" == pipewire ]] || return 1
+  fi
+  return 0
+}
+
+remove_stale_pipewire_state() {
+  local old_pid=""
+  local tries=0
+  if [[ -r "$pipewire_pid_file" ]]; then
+    old_pid="$(sed -n '1p' "$pipewire_pid_file" 2>/dev/null || true)"
+    if pipewire_process_alive "$old_pid"; then
+      session_log "Stopping stale project PipeWire process $old_pid"
+      kill "$old_pid" 2>/dev/null || true
+      while pipewire_process_alive "$old_pid" && (( tries < 20 )); do
+        sleep 0.1
+        ((tries += 1))
+      done
+      if pipewire_process_alive "$old_pid"; then
+        kill -KILL "$old_pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+  rm -f -- "$pipewire_pid_file" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0.lock" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0-manager.lock"
+}
+
 cleanup() {
   local pid tries
   for pid in "${child_pids[@]:-}"; do
@@ -246,7 +282,12 @@ cleanup() {
       wait "$pid" 2>/dev/null || true
     fi
   done
-  rm -f -- "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
+  rm -f -- "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" \
+    "$pipewire_pid_file" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0.lock" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" \
+    "$FEDORA_SESSION_RUNTIME/pipewire-0-manager.lock"
 }
 trap cleanup EXIT INT TERM
 
@@ -267,6 +308,8 @@ start_optional() {
   child_pids+=("$child_pid")
   if [[ "$name" == pipewire ]]; then
     pipewire_pid="$child_pid"
+    printf '%s\n' "$child_pid" > "$pipewire_pid_file"
+    chmod 600 "$pipewire_pid_file" 2>/dev/null || true
   fi
 }
 
@@ -278,43 +321,86 @@ wayland_transport_requested() {
 }
 
 pipewire_socket_ready() {
-  [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0" ]] \
-    || [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" ]]
+  # Mutter Devkit calls pw_context_connect() on the normal native server, not
+  # the manager endpoint. A manager socket alone is not a usable compositor
+  # transport and was the source of a false "ready" result.
+  [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0" ]]
 }
 
 start_minimal_pipewire_for_devkit() {
   wayland_transport_requested || return 0
   case "$FEDORA_DEVKIT_PIPEWIRE" in
     off|disabled|none|0|false|no)
-      session_log "Mutter Devkit PipeWire transport disabled (FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE); Wayland Devkit may not open"
-      return 0
+      session_log "Mutter Devkit PipeWire transport disabled (FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE); Wayland Devkit cannot start"
+      return 1
       ;;
     auto|on|enabled|1|true|yes)
       session_log "Starting minimal PipeWire display transport; full audio helpers remain disabled"
+      command -v pipewire >/dev/null 2>&1 || {
+        session_log "PipeWire binary is missing; install pipewire in the Fedora container"
+        return 1
+      }
+      command -v pw-cli >/dev/null 2>&1 || {
+        session_log "PipeWire native client probe is missing; install pipewire-utils in the Fedora container"
+        return 1
+      }
       start_optional pipewire
       ;;
     *)
       session_log "Unknown FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE; skipping minimal PipeWire display transport"
+      return 1
       ;;
   esac
 }
 
+pipewire_client_probe() {
+  command -v pw-cli >/dev/null 2>&1 || return 1
+  local probe_log="$FEDORA_SESSION_RUNTIME/pipewire-probe.log"
+  : > "$probe_log"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 4 env \
+      XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
+      PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
+      PIPEWIRE_REMOTE="$PIPEWIRE_REMOTE" \
+      pw-cli -r "$PIPEWIRE_REMOTE" info 0 > "$probe_log" 2>&1
+  else
+    env \
+      XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
+      PIPEWIRE_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME" \
+      PIPEWIRE_REMOTE="$PIPEWIRE_REMOTE" \
+      pw-cli -r "$PIPEWIRE_REMOTE" info 0 > "$probe_log" 2>&1
+  fi
+}
+
 wait_for_pipewire() {
-  [[ -n "$pipewire_pid" ]] || return 0
+  wayland_transport_requested || return 0
+  case "$FEDORA_DEVKIT_PIPEWIRE" in
+    off|disabled|none|0|false|no) return 1 ;;
+  esac
+  [[ -n "$pipewire_pid" ]] || return 1
+  command -v pw-cli >/dev/null 2>&1 || {
+    session_log "PipeWire native client probe is missing; install pipewire-utils in the Fedora container"
+    return 1
+  }
   local tries=0
+  local probe_rc=0
   while (( tries < 50 )); do
+    probe_rc=0
     if pipewire_socket_ready; then
-      session_log "PipeWire display transport is ready"
-      return 0
+      pipewire_client_probe || probe_rc=$?
+      if (( probe_rc == 0 )); then
+        session_log "PipeWire display transport is ready: $PIPEWIRE_RUNTIME_DIR/$PIPEWIRE_REMOTE"
+        return 0
+      fi
     fi
     if ! kill -0 "$pipewire_pid" 2>/dev/null; then
-      session_log "PipeWire exited before creating $FEDORA_SESSION_RUNTIME/pipewire-0; Mutter Devkit may fail"
+      session_log "PipeWire exited before accepting native clients; see $FEDORA_SESSION_RUNTIME/pipewire-probe.log"
       return 1
     fi
     sleep 0.1
     ((tries += 1))
   done
-  session_log "PipeWire did not publish a socket within 5 seconds; Mutter Devkit may fail"
+  session_log "PipeWire did not accept a native client within 5 seconds; see $FEDORA_SESSION_RUNTIME/pipewire-probe.log"
   return 1
 }
 
@@ -348,8 +434,9 @@ start_audio_stack() {
       start_minimal_pipewire_for_devkit
       ;;
   esac
-  wait_for_pipewire || true
+  wait_for_pipewire
 }
+remove_stale_pipewire_state
 start_audio_stack
 
 start_desktop_portals() {
