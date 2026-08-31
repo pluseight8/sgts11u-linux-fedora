@@ -35,6 +35,19 @@ if ! grep -Fxq 'mutter-devkit' "$root/fedora/packages/gnome-packages.txt"; then
   printf '%s\n' 'mutter-devkit must remain in the Fedora GNOME package manifest' >&2
   status=1
 fi
+for executable in \
+  scripts/install.sh \
+  scripts/start.sh \
+  scripts/stop.sh \
+  scripts/update.sh \
+  scripts/uninstall.sh \
+  fedora/gnome/fedora-session \
+  fedora/rootfs/install-gnome.sh; do
+  if [[ ! -x "$root/$executable" ]]; then
+    printf 'required executable bit is missing: %s\n' "$executable" >&2
+    status=1
+  fi
+done
 if grep -Fxq 'xorg-x11-server-utils' "$root/fedora/packages/gnome-packages.txt"; then
   printf '%s\n' 'unavailable xorg-x11-server-utils must not be a required package' >&2
   status=1
@@ -61,6 +74,11 @@ fi
 if ! grep -Fq 'report_process_exit' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GNOME Shell Devkit crashed' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'GNOME crash evidence/reporting guard is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'PRoot D-Bus/GVFS compatibility guards are missing' >&2
   status=1
 fi
 if grep -Fq 'source "$session_state_host"' "$root/scripts/start.sh"; then

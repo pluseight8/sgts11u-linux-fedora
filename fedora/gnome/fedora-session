@@ -49,6 +49,16 @@ if [[ "${1:-}" != --inside-dbus ]]; then
 fi
 shift
 
+# GNOME 50+ creates a Gio.DBus.system proxy during Shell startup. A PRoot
+# guest has no Android/systemd system bus, but it does have the private bus
+# created above. Reuse that bus as a compatibility address unless the caller
+# supplied a real system bus explicitly. This provides a D-Bus endpoint for
+# user-session startup without pretending that logind, UPower or RTKit exist.
+if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" && -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+  export DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
+  session_log "No system D-Bus is available; using the private session bus as a GNOME compatibility endpoint"
+fi
+
 export DISPLAY="$FEDORA_DISPLAY"
 export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
 export XDG_CURRENT_DESKTOP="GNOME"
@@ -108,12 +118,14 @@ start_desktop_portals() {
   case "$FEDORA_PORTAL_MODE" in
     off|disabled|none)
       export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+      export GIO_USE_VFS="${GIO_USE_VFS:-local}"
       session_log "Desktop portals disabled (FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE)"
       return 0
       ;;
     auto)
       if ! portal_fuse_available; then
         export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+        export GIO_USE_VFS="${GIO_USE_VFS:-local}"
         session_log "Skipping xdg-desktop-portal: /dev/fuse is unavailable under Android/PRoot"
         return 0
       fi
@@ -122,6 +134,7 @@ start_desktop_portals() {
       ;;
     *)
       export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+      export GIO_USE_VFS="${GIO_USE_VFS:-local}"
       session_log "Unknown FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE; desktop portals disabled"
       return 0
       ;;

@@ -160,12 +160,17 @@ wrapper остаётся experimental.
 
 Не запускайте `systemctl` как доказательство исправности. PRoot не даёт
 настоящего PID 1/systemd и cgroups. Используйте `fedora-session`, который
-запускает конкретные user processes и D-Bus session bus.
+запускает конкретные user processes и private D-Bus session bus. Для GNOME
+50+ supervisor также направляет `DBUS_SYSTEM_BUS_ADDRESS` на этот private bus:
+это совместимый endpoint для инициализации Shell, а не настоящий system bus.
+Поэтому сервисы logind, UPower, RTKit и другие privileged system services
+по-прежнему недоступны; их предупреждения ожидаемы.
 
 Сообщение `fuse: failed to open /dev/fuse` относится к document portal:
 Android/PRoot обычно не может предоставить FUSE mount. В `FEDORA_PORTAL_MODE=auto`
-порталы теперь пропускаются автоматически, а GNOME desktop продолжает
-запускаться. Принудительный `FEDORA_PORTAL_MODE=on` имеет смысл только после
+порталы теперь пропускаются автоматически, `GIO_USE_VFS=local` предотвращает
+лишнюю активацию GVFS, а GNOME desktop продолжает запускаться. Принудительный
+`FEDORA_PORTAL_MODE=on` имеет смысл только после
 проверки доступности FUSE и может снова вернуть эту ошибку.
 
 ## Нет audio
