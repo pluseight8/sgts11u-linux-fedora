@@ -129,10 +129,12 @@ network namespaces или FUSE. Поэтому проект запускает s
 обычные user processes, а не имитирует полноценную bare-metal Fedora.
 
 GPU через `virglrenderer-android`/`virpipe` и альтернативный Zink/Vulkan путь
-являются экспериментальными для Mali/Immortalis. Пока `glxinfo -B`, `eglinfo`,
-`vulkaninfo`, Mutter renderer и frame-pacing не проверены на конкретном
-устройстве, итоговый статус остаётся `UNTESTED` или `PARTIAL`; `llvmpipe`,
-`softpipe` и `lavapipe` не считаются аппаратным ускорением.
+являются экспериментальными для Mali/Immortalis. В режиме `auto` при отсутствии
+virgl проект выбирает стабильный `llvmpipe`, чтобы GNOME не зависел от
+непроверенного Android/Mesa backend. Пока `glxinfo -B`, `eglinfo`, `vulkaninfo`,
+Mutter renderer и frame-pacing не проверены на конкретном устройстве, итоговый
+статус остаётся `UNTESTED` или `PARTIAL`; `llvmpipe`, `softpipe` и `lavapipe`
+не считаются аппаратным ускорением.
 
 S Pen pressure/tilt, Android camera, Wi-Fi/Bluetooth UI, global brightness,
 clipboard в фоне и автозапуск после boot имеют Android permission/background
