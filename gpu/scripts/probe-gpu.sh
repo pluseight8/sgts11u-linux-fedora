@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-gpu-probe-v1
-GPU_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+GPU_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$GPU_SCRIPT_DIR/../../scripts/lib/common.sh"
 

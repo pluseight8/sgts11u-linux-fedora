@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-frame-pacing-v1
-GPU_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+GPU_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$GPU_SCRIPT_DIR/../../scripts/lib/common.sh"
 
@@ -61,7 +61,7 @@ umask 077
 } > "$report" 2>&1
 
 if fedora_container_running && [[ -r "$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime/fedora-session-state.env" ]]; then
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   source "$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime/fedora-session-state.env" || true
   {
     printf '\n[Fedora Wayland client proxy]\n'

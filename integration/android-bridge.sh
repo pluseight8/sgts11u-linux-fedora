@@ -5,9 +5,8 @@ set -Eeuo pipefail
 # This is a small allowlisted client. It can be called from Termux or from a
 # Fedora desktop entry through the bind-mounted project tree.
 
-TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 FEDORA_HOME="${HOME:-/data/data/com.termux/files/home}"
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_CONFIG="$SCRIPT_DIR/android-apps.conf"
 if [[ ! -r "$APP_CONFIG" && -r /usr/local/share/fedora-shell/android-apps.conf ]]; then
   APP_CONFIG=/usr/local/share/fedora-shell/android-apps.conf
@@ -177,9 +176,13 @@ case "$command_name" in
     ;;
   vibrate)
     (( $# == 1 )) || { usage; exit 64; }
-    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 <= 10000 )) || { printf '%s\n' 'duration must be 0..10000 ms' >&2; exit 64; }
+    duration="$1"
+    if [[ ! "$duration" =~ ^[0-9]+$ ]] || (( duration > 10000 )); then
+      printf '%s\n' 'duration must be 0..10000 ms' >&2
+      exit 64
+    fi
     require_api termux-vibrate
-    exec termux-vibrate -d "$1"
+    exec termux-vibrate -d "$duration"
     ;;
   launch-camera)
     package_name="$(read_app_package camera)"

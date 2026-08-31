@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-uninstaller-v1
-FEDORA_ENTRY_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FEDORA_ENTRY_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$FEDORA_ENTRY_DIR/lib/common.sh"
 
@@ -66,12 +66,12 @@ if [[ -e "$FEDORA_BOOT_DIR/fedora-shell" ]] && ! grep -Fq 'fedora-shell-boot-v1'
 fi
 
 if [[ -d "$FEDORA_STATE_DIR" ]]; then
-  [[ "$FEDORA_STATE_DIR" == "$FEDORA_USER_HOME/.fedora-shell" ]] || {
-    [[ -f "$FEDORA_STATE_DIR/config.env" ]] && grep -Fq 'FEDORA_CONTAINER=' "$FEDORA_STATE_DIR/config.env" || {
+  if [[ "$FEDORA_STATE_DIR" != "$FEDORA_USER_HOME/.fedora-shell" ]]; then
+    if [[ ! -f "$FEDORA_STATE_DIR/config.env" ]] || ! grep -Fq 'FEDORA_CONTAINER=' "$FEDORA_STATE_DIR/config.env"; then
       fedora_die "Refusing to remove custom state directory without a Fedora Shell config: $FEDORA_STATE_DIR"
       exit 1
-    }
-  }
+    fi
+  fi
 fi
 
 if ! fedora_confirm "Remove Fedora container, Fedora Shell state and owned shortcuts? Backups and the checkout are kept."; then

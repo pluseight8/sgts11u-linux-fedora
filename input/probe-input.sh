@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-input-probe-v1
-INPUT_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+INPUT_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$INPUT_SCRIPT_DIR/../scripts/lib/common.sh"
 

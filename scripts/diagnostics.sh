@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-diagnostics-v1
-FEDORA_ENTRY_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FEDORA_ENTRY_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$FEDORA_ENTRY_DIR/lib/common.sh"
 
@@ -83,19 +83,25 @@ if fedora_have_cmd termux-x11; then
 fi
 
 if [[ "$MODE" == full ]]; then
-  [[ -x /system/bin/getprop ]] && capture 'Android getprop' /system/bin/getprop || true
+  if [[ -x /system/bin/getprop ]]; then
+    capture 'Android getprop' /system/bin/getprop || true
+  fi
   capture 'CPU info' cat /proc/cpuinfo
   capture 'memory info' cat /proc/meminfo
   capture 'Termux info' termux-info
   capture 'installed Termux packages' pkg list-installed
   capture 'Termux:X11 preferences' termux-x11-preference list
-  [[ -x /system/bin/dumpsys ]] && capture 'Android display' /system/bin/dumpsys display || true
-  [[ -x /system/bin/dumpsys ]] && capture 'SurfaceFlinger' /system/bin/dumpsys SurfaceFlinger || true
-  [[ -x /system/bin/dumpsys ]] && capture 'Android input' /system/bin/dumpsys input || true
-  [[ -x /system/bin/dumpsys ]] && capture 'Android audio' /system/bin/dumpsys audio || true
+  if [[ -x /system/bin/dumpsys ]]; then
+    capture 'Android display' /system/bin/dumpsys display || true
+    capture 'SurfaceFlinger' /system/bin/dumpsys SurfaceFlinger || true
+    capture 'Android input' /system/bin/dumpsys input || true
+    capture 'Android audio' /system/bin/dumpsys audio || true
+  fi
 else
-  [[ -x /system/bin/settings ]] && capture 'Android display settings' /system/bin/settings get system peak_refresh_rate || true
-  [[ -x /system/bin/settings ]] && capture 'Android min refresh setting' /system/bin/settings get system min_refresh_rate || true
+  if [[ -x /system/bin/settings ]]; then
+    capture 'Android display settings' /system/bin/settings get system peak_refresh_rate || true
+    capture 'Android min refresh setting' /system/bin/settings get system min_refresh_rate || true
+  fi
 fi
 
 if (( INCLUDE_FEDORA )); then
@@ -110,6 +116,7 @@ if (( INCLUDE_FEDORA )); then
     } >> "$report" 2>&1 || true
     {
       printf '\n[Fedora guest version]\n'
+      # shellcheck disable=SC2016
       fedora_pd_login /usr/bin/env \
         "DISPLAY=$FEDORA_DISPLAY" \
         "XDG_RUNTIME_DIR=/tmp/fedora-runtime" \

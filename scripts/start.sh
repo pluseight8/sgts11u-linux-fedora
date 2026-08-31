@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Marker: fedora-shell-start-v1
-FEDORA_ENTRY_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FEDORA_ENTRY_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$FEDORA_ENTRY_DIR/lib/common.sh"
 
@@ -131,6 +131,7 @@ ensure_virgl() {
   sleep 0.3
 }
 
+# shellcheck disable=SC2317
 cleanup_transport() {
   if (( LEAVE_TRANSPORT )); then
     return 0

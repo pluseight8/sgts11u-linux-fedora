@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Static checks run on a normal Linux CI host; Termux scripts are parsed with
 # bash and are not executed here because Android/system commands are absent.
-root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 status=0
 
 while IFS= read -r -d '' file; do

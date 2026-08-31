@@ -3,12 +3,13 @@
 # Shared, deliberately boring helpers for the Termux-side scripts.
 # This file must remain POSIX-ish bash: it is also used by Termux:Widget.
 
-FEDORA_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-FEDORA_PROJECT_ROOT="$(CDPATH= cd -- "$FEDORA_SCRIPT_DIR/../.." && pwd)"
+FEDORA_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FEDORA_PROJECT_ROOT="$(CDPATH='' cd -- "$FEDORA_SCRIPT_DIR/../.." && pwd)"
 FEDORA_USER_HOME="${HOME:-}"
 
 if [[ -z "$FEDORA_USER_HOME" ]]; then
   printf '%s\n' "HOME is not set; run this from Termux or set HOME explicitly." >&2
+  # shellcheck disable=SC2317
   return 1 2>/dev/null || exit 1
 fi
 
@@ -43,6 +44,8 @@ FEDORA_LOG_DIR="${FEDORA_STATE_DIR}/logs"
 FEDORA_PID_DIR="${FEDORA_STATE_DIR}/pids"
 FEDORA_BOOT_DIR="${FEDORA_USER_HOME}/.termux/boot"
 FEDORA_WIDGET_DIR="${FEDORA_USER_HOME}/.shortcuts"
+export FEDORA_PROJECT_ROOT FEDORA_TERMUX_PREFIX FEDORA_TERMUX_HOME
+export FEDORA_BOOT_DIR FEDORA_WIDGET_DIR
 
 fedora_log() {
   local message="$*"
