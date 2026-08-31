@@ -77,7 +77,9 @@ if ! grep -Fq 'report_process_exit' "$root/fedora/gnome/fedora-session" \
   status=1
 fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \
-  || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session"; then
+  || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'send_destination_prefix' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'org.freedesktop.portal' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'PRoot D-Bus/GVFS compatibility guards are missing' >&2
   status=1
 fi

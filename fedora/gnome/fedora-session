@@ -40,12 +40,59 @@ session_die() {
   exit 1
 }
 
+portal_fuse_available() {
+  [[ -c /dev/fuse ]] || return 1
+  # Android may expose the device node while SELinux still denies opening it.
+  (exec 3<>/dev/fuse) 2>/dev/null
+}
+
+portal_mode_disables_autostart() {
+  case "$FEDORA_PORTAL_MODE" in
+    off|disabled|none) return 0 ;;
+    auto) ! portal_fuse_available ;;
+    on|enabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+make_no_portal_dbus_config() {
+  local config_path="$FEDORA_SESSION_RUNTIME/dbus-session-no-portals.conf"
+  [[ -r /usr/share/dbus-1/session.conf ]] || return 1
+
+  # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection, but
+  # GNOME Shell and Mutter Devkit can still request org.freedesktop.portal.*
+  # directly. Add last-wins D-Bus policy so a no-FUSE session cannot activate
+  # the portal/document services behind the supervisor's back.
+  awk '
+    /<\/busconfig>/ && !portal_policy_added {
+      print "  <policy context=\"default\">"
+      print "    <deny send_destination_prefix=\"org.freedesktop.portal\"/>"
+      print "    <deny send_destination_prefix=\"org.freedesktop.impl.portal\"/>"
+      print "    <deny own_prefix=\"org.freedesktop.portal\"/>"
+      print "    <deny own_prefix=\"org.freedesktop.impl.portal\"/>"
+      print "  </policy>"
+      portal_policy_added=1
+    }
+    { print }
+  ' /usr/share/dbus-1/session.conf > "$config_path"
+  chmod 600 "$config_path" 2>/dev/null || true
+  printf '%s\n' "$config_path"
+}
+
 # dbus-run-session supplies the session bus and removes it when the compositor
 # exits. Re-exec keeps the inside-bus path easy to inspect in logs.
 if [[ "${1:-}" != --inside-dbus ]]; then
   command -v dbus-run-session >/dev/null 2>&1 || session_die "dbus-run-session is missing"
   export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
-  exec dbus-run-session -- "$0" --inside-dbus "$@"
+  dbus_args=()
+  if portal_mode_disables_autostart; then
+    if dbus_config_path="$(make_no_portal_dbus_config || true)" && [[ -n "$dbus_config_path" ]]; then
+      dbus_args+=("--config-file=$dbus_config_path")
+    else
+      session_log "Could not build the no-portal D-Bus policy; client-side portal guards remain active"
+    fi
+  fi
+  exec dbus-run-session "${dbus_args[@]}" -- "$0" --inside-dbus "$@"
 fi
 shift
 
@@ -107,12 +154,6 @@ start_optional() {
 start_optional pipewire
 start_optional wireplumber
 start_optional pipewire-pulse
-
-portal_fuse_available() {
-  [[ -c /dev/fuse ]] || return 1
-  # Android may expose the device node while SELinux still denies opening it.
-  (exec 3<>/dev/fuse) 2>/dev/null
-}
 
 start_desktop_portals() {
   case "$FEDORA_PORTAL_MODE" in

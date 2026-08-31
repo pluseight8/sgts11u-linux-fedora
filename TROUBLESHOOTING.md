@@ -169,7 +169,8 @@ wrapper остаётся experimental.
 Сообщение `fuse: failed to open /dev/fuse` относится к document portal:
 Android/PRoot обычно не может предоставить FUSE mount. В `FEDORA_PORTAL_MODE=auto`
 порталы теперь пропускаются автоматически, `GIO_USE_VFS=local` предотвращает
-лишнюю активацию GVFS, а GNOME desktop продолжает запускаться. Принудительный
+лишнюю активацию GVFS, а supervisor также блокирует D-Bus auto-activation
+portal/document services. GNOME desktop продолжает запускаться. Принудительный
 `FEDORA_PORTAL_MODE=on` имеет смысл только после
 проверки доступности FUSE и может снова вернуть эту ошибку.
 
