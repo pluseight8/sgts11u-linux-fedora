@@ -43,17 +43,26 @@ Termux:X11 в этой схеме — только display transport. Налич
 ## Быстрый старт на планшете
 
 Установите Termux и все его add-ons из одного источника подписи (F-Droid либо
-GitHub; смешивать источники нельзя), затем откройте Termux и выполните:
+GitHub; смешивать источники нельзя), затем откройте Termux. Самый удобный
+вариант не требует предварительно устанавливать Git:
+
+```bash
+pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+```
+
+Bootstrap устанавливает Git с `-y`, клонирует проект в
+`$HOME/fedora-galaxy` и запускает installer. Для полностью автоматического
+подтверждения Fedora installer добавьте `--yes` в конец команды bootstrap.
+
+Общий Android storage для bind/backup необязателен. Если он нужен, после
+bootstrap запустите отдельно и дождитесь его собственного вопроса:
 
 ```bash
 termux-setup-storage
-pkg update
-pkg install git
-git clone https://github.com/pluseight8/sgts11u-linux-fedora.git "$HOME/fedora-galaxy"
-cd "$HOME/fedora-galaxy"
-./scripts/install.sh
-./scripts/start.sh
 ```
+
+Не вставляйте `termux-setup-storage` и следующие команды одним блоком: при
+существующем `~/storage` эта команда интерактивна.
 
 Для автоматического запуска через Termux:Boot используйте только после
 проверки ручного запуска:
@@ -90,6 +99,15 @@ scripts/uninstall.sh     удалить только файлы проекта �
 
 `reset.sh` и `uninstall.sh` требуют явного подтверждения. Они никогда не
 трогают пользовательские Android-файлы, One UI или системные разделы.
+
+Для обслуживания используйте:
+
+```text
+scripts/update.sh             backup + Termux/Fedora package update
+scripts/update.sh --no-termux только Fedora container
+scripts/remove.sh --dry-run   preview удаления
+scripts/remove.sh              удалить Fedora Shell после подтверждения
+```
 
 Дополнительные проверки:
 

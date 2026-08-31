@@ -1,5 +1,20 @@
 # Troubleshooting
 
+## Termux asks `Y/n` and then aborts
+
+`termux-setup-storage` is interactive when `~/storage` already exists. Run it
+alone, answer `y`, and wait for the shell prompt before entering another
+command. The bootstrap avoids this interaction entirely and also uses
+non-interactive `pkg` flags:
+
+```bash
+pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+```
+
+The message about selecting a Termux mirror is informational if package lists
+are fetched successfully. Use `termux-change-repo` only when the update really
+fails.
+
 Сначала сохраните диагностику:
 
 ```bash

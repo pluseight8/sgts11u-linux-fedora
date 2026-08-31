@@ -10,13 +10,15 @@ source "$FEDORA_ENTRY_DIR/lib/guest-config.sh"
 
 FEDORA_ASSUME_YES="${FEDORA_ASSUME_YES:-0}"
 MAKE_BACKUP=1
+UPDATE_TERMUX=1
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./scripts/update.sh [--yes] [--no-backup]
+Usage: ./scripts/update.sh [--yes] [--no-backup] [--no-termux]
 
 Updates Termux packages and Fedora packages without changing Fedora release
-or replacing the GPU stack. A rootfs backup is made by default.
+or replacing the GPU stack. A rootfs backup is made by default. Use
+--no-termux to update only the Fedora container.
 EOF
 }
 
@@ -24,6 +26,7 @@ while (( $# > 0 )); do
   case "$1" in
     --yes) FEDORA_ASSUME_YES=1; shift ;;
     --no-backup) MAKE_BACKUP=0; shift ;;
+    --no-termux) UPDATE_TERMUX=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 64 ;;
   esac
@@ -43,9 +46,13 @@ else
   fedora_warn "Skipping backup because --no-backup was explicitly supplied."
 fi
 
-fedora_log "Updating Termux packages."
-pkg update -y
-pkg upgrade -y
+if (( UPDATE_TERMUX )); then
+  fedora_log "Updating Termux packages."
+  pkg update -y
+  pkg upgrade -y
+else
+  fedora_log "Skipping Termux package update (--no-termux)."
+fi
 
 fedora_log "Updating Fedora packages inside the existing container."
 fedora_pd_login_root /usr/bin/dnf -y upgrade --refresh --setopt=install_weak_deps=False

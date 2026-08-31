@@ -7,11 +7,13 @@ FEDORA_ENTRY_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$FEDORA_ENTRY_DIR/lib/common.sh"
 
 FEDORA_ASSUME_YES="${FEDORA_ASSUME_YES:-0}"
+DRY_RUN=0
 while (( $# > 0 )); do
   case "$1" in
     --yes) FEDORA_ASSUME_YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      printf '%s\n' 'Usage: ./scripts/uninstall.sh [--yes]'
+      printf '%s\n' 'Usage: ./scripts/uninstall.sh [--yes] [--dry-run]'
       exit 0
       ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 64 ;;
@@ -72,6 +74,17 @@ if [[ -d "$FEDORA_STATE_DIR" ]]; then
       exit 1
     fi
   fi
+fi
+
+if (( DRY_RUN )); then
+  printf '%s\n' 'Fedora Shell uninstall preview:'
+  printf '  container: %s\n' "$FEDORA_CONTAINER"
+  printf '  install_root: %s\n' "$install_root"
+  printf '  state_dir: %s\n' "$FEDORA_STATE_DIR"
+  printf '  widget_shortcut: %s\n' "$FEDORA_WIDGET_DIR/Fedora"
+  printf '  boot_hook: %s\n' "$FEDORA_BOOT_DIR/fedora-shell"
+  printf '%s\n' 'Backups, the checkout, Termux packages, Android and One UI are kept.'
+  exit 0
 fi
 
 if ! fedora_confirm "Remove Fedora container, Fedora Shell state and owned shortcuts? Backups and the checkout are kept."; then

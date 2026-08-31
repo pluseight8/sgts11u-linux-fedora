@@ -23,14 +23,33 @@ Termux, Termux:X11, Termux:API, Termux:Boot и Termux:Widget должны быт
 
 ## Ручные шаги
 
+Самый простой bootstrap можно вставить одной строкой. Он не запускает
+интерактивный `termux-setup-storage` и поэтому не смешивает его вопрос с
+последующими командами:
+
 ```bash
-termux-setup-storage
-pkg update
-pkg install git
+pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/pluseight8/sgts11u-linux-fedora/main/scripts/bootstrap.sh -o "$PREFIX/tmp/fedora-shell-bootstrap.sh" && bash "$PREFIX/tmp/fedora-shell-bootstrap.sh"
+```
+
+Или вручную:
+
+```bash
+pkg update -y
+pkg install -y git
 git clone https://github.com/pluseight8/sgts11u-linux-fedora.git "$HOME/fedora-galaxy"
 cd "$HOME/fedora-galaxy"
 ./scripts/install.sh
 ```
+
+`termux-setup-storage` запускайте отдельно, только если нужен доступ к общему
+Android storage, и отвечайте `y` именно на его вопрос. `pkg install` в этой
+инструкции использует `-y`, поэтому последующая вставка команд не может быть
+принята за ответ `Y/n`.
+
+Если `pkg` сообщает, что mirror не выбран, но затем успешно выбирает mirror и
+читает package lists, это штатное автоматическое первоначальное определение.
+При настоящей ошибке зеркала выполните `termux-change-repo` и повторите
+bootstrap.
 
 Installer:
 
@@ -57,6 +76,10 @@ Installer:
 --skip-x11-package       не ставить termux-x11-nightly package
 --min-free-gib N         изменить минимальное свободное место
 ```
+
+Bootstrap поддерживает `--dir DIRECTORY`, `--ref REF`, `--no-install` и
+передаёт installer-флаги `--yes`, `--allow-unknown-device`, `--enable-boot`,
+`--skip-x11-package`, `--min-free-gib N`.
 
 Флаг `--enable-boot` не превращает Android в Linux init. Termux:Boot запускает
 скрипт best-effort после boot, но Android background restrictions и Samsung
@@ -120,6 +143,37 @@ tablet backend.
 
 `WORKING` можно присвоить компоненту только после сохранения вывода теста на
 этом планшете.
+
+## Обновление и удаление
+
+Обычное обновление останавливает сессию, создаёт backup, обновляет Termux и
+Fedora packages, затем повторно синхронизирует GNOME integration:
+
+```bash
+./scripts/update.sh
+```
+
+Если обновлять Termux packages не требуется:
+
+```bash
+./scripts/update.sh --no-termux
+```
+
+Перед удалением можно посмотреть точный scope:
+
+```bash
+./scripts/remove.sh --dry-run
+```
+
+Удаление после подтверждения:
+
+```bash
+./scripts/remove.sh
+```
+
+Удаляются только контейнер Fedora, установленное дерево Fedora Shell, его
+shortcut/boot hook и state/logs. Checkout, backups, Termux packages, Android и
+One UI сохраняются.
 
 ## Возврат к One UI
 
