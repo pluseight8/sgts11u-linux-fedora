@@ -46,6 +46,10 @@ fedora_require_termux
 fedora_require_non_root
 fedora_require_container
 fedora_have_cmd termux-x11 || { fedora_die "termux-x11 is missing. Install termux-x11-nightly or rerun install.sh."; exit 1; }
+if [[ -x /system/bin/pm ]] && ! fedora_android_package_installed com.termux.x11; then
+  fedora_die "Termux:X11 Android APK (com.termux.x11) is not installed. Install the compatible APK from the same source as Termux, open it once, then retry."
+  exit 1
+fi
 
 if [[ ! "$FEDORA_DISPLAY" =~ ^:[0-9]+$ ]]; then
   fedora_die "FEDORA_DISPLAY must look like :0 or :1; got '$FEDORA_DISPLAY'"
@@ -53,6 +57,7 @@ if [[ ! "$FEDORA_DISPLAY" =~ ^:[0-9]+$ ]]; then
 fi
 
 x11_pid_file="$FEDORA_PID_DIR/termux-x11.pid"
+x11_args_file="$FEDORA_PID_DIR/termux-x11.args"
 virgl_pid_file="$FEDORA_PID_DIR/virgl.pid"
 session_state_host="$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime/fedora-session-state.env"
 
@@ -78,19 +83,35 @@ open_x11_activity() {
 
 ensure_x11() {
   local x11_socket="$FEDORA_TERMUX_PREFIX/tmp/.X11-unix/X${FEDORA_DISPLAY#:}"
+  local expected_x11_args="display=$FEDORA_DISPLAY legacy_drawing=$LEGACY_DRAWING force_bgra=$FORCE_BGRA"
   if [[ -f "$x11_pid_file" ]]; then
     local old_pid
     old_pid="$(sed -n '1p' "$x11_pid_file" 2>/dev/null || true)"
     if fedora_pid_matches "$old_pid" termux-x11 && [[ -S "$x11_socket" ]]; then
-      fedora_log "Reusing Termux:X11 process $old_pid on $FEDORA_DISPLAY."
-      open_x11_activity
-      return 0
+      local recorded_x11_args=""
+      if [[ -r "$x11_args_file" ]]; then
+        recorded_x11_args="$(sed -n '1p' "$x11_args_file" 2>/dev/null || true)"
+      fi
+      # Old installations did not record launch flags. Reusing them is safe
+      # for the ordinary path, but a requested compatibility flag must be
+      # applied to a freshly-created X11 process or it would be a no-op.
+      if [[ "$recorded_x11_args" == "$expected_x11_args" ]] \
+        || { [[ -z "$recorded_x11_args" ]] && (( ! LEGACY_DRAWING && ! FORCE_BGRA )); }; then
+        fedora_log "Reusing Termux:X11 process $old_pid on $FEDORA_DISPLAY."
+        open_x11_activity
+        return 0
+      fi
+      fedora_warn "Termux:X11 process $old_pid was started with different drawing flags; restarting the project-owned transport."
+      fedora_kill_owned_pid "$x11_pid_file" termux-x11
+      rm -f -- "$x11_args_file"
     fi
     if fedora_pid_matches "$old_pid" termux-x11; then
       fedora_warn "Recorded Termux:X11 process $old_pid has no socket $x11_socket; restarting the stale server."
       fedora_kill_owned_pid "$x11_pid_file" termux-x11
+      rm -f -- "$x11_args_file"
     else
       rm -f -- "$x11_pid_file"
+      rm -f -- "$x11_args_file"
     fi
   fi
 
@@ -102,7 +123,9 @@ ensure_x11() {
     >> "$FEDORA_LOG_DIR/termux-x11.log" 2>&1 &
   local x11_pid=$!
   printf '%s\n' "$x11_pid" > "$x11_pid_file"
+  printf '%s\n' "$expected_x11_args" > "$x11_args_file"
   chmod 600 "$x11_pid_file"
+  chmod 600 "$x11_args_file"
   sleep 1
   open_x11_activity
 
@@ -121,7 +144,9 @@ wait_for_x11_transport() {
   local x11_pid x11_socket tries=0
   x11_pid="$(sed -n '1p' "$x11_pid_file" 2>/dev/null || true)"
   x11_socket="$FEDORA_TERMUX_PREFIX/tmp/.X11-unix/X${FEDORA_DISPLAY#:}"
-  while (( tries < 50 )); do
+  # Android may delay activity/window creation while the tablet is resuming.
+  # Give the transport 15 seconds before declaring a stale socket failure.
+  while (( tries < 150 )); do
     if [[ -S "$x11_socket" ]]; then
       return 0
     fi
@@ -142,6 +167,15 @@ ensure_virgl() {
     software|llvmpipe|softpipe|zink|none) return 0 ;;
     *) fedora_die "Unknown FEDORA_GPU_MODE=$mode"; return 1 ;;
   esac
+  if [[ "$mode" == auto ]]; then
+    rm -f -- "$virgl_pid_file"
+    if fedora_have_cmd virgl_test_server_android; then
+      fedora_log "virglrenderer-android is installed but auto mode keeps the stable software renderer; use FEDORA_GPU_MODE=virpipe for an explicit GPU experiment."
+    else
+      fedora_warn "virgl_test_server_android is absent; using Mesa llvmpipe software fallback for GNOME stability."
+    fi
+    return 0
+  fi
   if ! fedora_have_cmd virgl_test_server_android; then
     rm -f -- "$virgl_pid_file"
     if [[ "$mode" == virpipe ]]; then
@@ -167,6 +201,10 @@ ensure_virgl() {
   printf '%s\n' "$virgl_pid" > "$virgl_pid_file"
   chmod 600 "$virgl_pid_file"
   sleep 0.3
+  if ! fedora_pid_matches "$virgl_pid" virgl_test_server_android; then
+    fedora_die "virgl_test_server_android exited during startup; inspect $FEDORA_LOG_DIR/virgl.log"
+    return 1
+  fi
 }
 
 # shellcheck disable=SC2317
@@ -176,6 +214,7 @@ cleanup_transport() {
   fi
   fedora_kill_owned_pid "$virgl_pid_file" virgl_test_server_android
   fedora_kill_owned_pid "$x11_pid_file" termux-x11
+  rm -f -- "$x11_args_file"
   if [[ -x "$FEDORA_INSTALL_ROOT/audio/stop.sh" ]]; then
     "$FEDORA_INSTALL_ROOT/audio/stop.sh" || true
   fi
@@ -202,7 +241,24 @@ fi
 rm -f -- "$session_state_host"
 
 if [[ -x "$FEDORA_INSTALL_ROOT/audio/start.sh" ]]; then
-  "$FEDORA_INSTALL_ROOT/audio/start.sh" || fedora_warn "Optional Termux audio transport did not start."
+  case "$FEDORA_AUDIO_MODE" in
+    off|disabled|none)
+      fedora_log "Termux audio transport disabled (FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE)."
+      ;;
+    auto)
+      if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
+        fedora_log "Termux audio transport skipped by low memory profile; use FEDORA_AUDIO_MODE=on to enable it."
+      else
+        "$FEDORA_INSTALL_ROOT/audio/start.sh" || fedora_warn "Optional Termux audio transport did not start."
+      fi
+      ;;
+    on|enabled)
+      "$FEDORA_INSTALL_ROOT/audio/start.sh" || fedora_warn "Optional Termux audio transport did not start."
+      ;;
+    *)
+      fedora_warn "Unknown FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE; skipping optional Termux audio transport."
+      ;;
+  esac
 fi
 
 gpu_env=()
@@ -212,17 +268,9 @@ case "$FEDORA_GPU_MODE" in
   softpipe) gpu_env+=(GALLIUM_DRIVER=softpipe LIBGL_ALWAYS_SOFTWARE=1) ;;
   zink) gpu_env+=(GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink) ;;
   auto)
-    virgl_pid=""
-    if [[ -f "$virgl_pid_file" ]]; then
-      virgl_pid="$(sed -n '1p' "$virgl_pid_file" 2>/dev/null || true)"
-    fi
-    if [[ -n "$virgl_pid" ]] && fedora_pid_matches "$virgl_pid" virgl_test_server_android; then
-      gpu_env+=(GALLIUM_DRIVER=virpipe)
-    else
-      # A device without the optional virgl bridge is safer with an explicit
-      # software renderer than with an unverified Android/Mesa default.
-      gpu_env+=(GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1)
-    fi
+    # auto is deliberately deterministic: an installed experimental bridge
+    # must never turn a known-good desktop into a black screen by surprise.
+    gpu_env+=(GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1)
     ;;
   none) ;;
 esac
@@ -234,8 +282,14 @@ session_env=(
   "FEDORA_SESSION_LOG=/tmp/fedora-session.log"
   "FEDORA_GPU_MODE=$FEDORA_GPU_MODE"
   "FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE"
+  "FEDORA_MEMORY_PROFILE=$FEDORA_MEMORY_PROFILE"
+  "FEDORA_SETTINGS_DAEMON=$FEDORA_SETTINGS_DAEMON"
+  "FEDORA_LAUNCH_TERMINAL=$FEDORA_LAUNCH_TERMINAL"
+  "FEDORA_KEYRING_MODE=$FEDORA_KEYRING_MODE"
+  "FEDORA_SEARCH_MODE=$FEDORA_SEARCH_MODE"
   "FEDORA_NESTED_SCALE=$FEDORA_NESTED_SCALE"
   "FEDORA_NESTED_MODE=$FEDORA_NESTED_MODE"
+  "FEDORA_NESTED_MODE_SPECS=$FEDORA_NESTED_MODE_SPECS"
   "FEDORA_ALLOW_X11=${FEDORA_ALLOW_X11:-0}"
   "FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE"
 )

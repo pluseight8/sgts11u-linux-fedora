@@ -37,6 +37,8 @@ if ! grep -Fxq 'mutter-devkit' "$root/fedora/packages/gnome-packages.txt"; then
 fi
 for executable in \
   scripts/install.sh \
+  scripts/bootstrap.sh \
+  scripts/remove.sh \
   scripts/start.sh \
   scripts/stop.sh \
   scripts/update.sh \
@@ -67,8 +69,41 @@ if ! grep -Fq 'LIBGL_ALWAYS_SOFTWARE=1' "$root/scripts/start.sh"; then
   status=1
 fi
 if ! grep -Fq 'TERMUX_X11_LEGACY_DRAWING' "$root/scripts/start.sh" \
-  || ! grep -Fq 'has no socket' "$root/scripts/start.sh"; then
+  || ! grep -Fq 'has no socket' "$root/scripts/start.sh" \
+  || ! grep -Fq 'different drawing flags' "$root/scripts/start.sh" \
+  || ! grep -Fq 'termux-x11.args' "$root/scripts/stop.sh"; then
   printf '%s\n' 'Termux:X11 black-screen/stale-socket recovery is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'fedora_sync_project_tree' "$root/scripts/install.sh" \
+  || ! grep -Fq 'FEDORA_CHECKOUT_ROOT' "$root/scripts/update.sh"; then
+  printf '%s\n' 'project checkout synchronization is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'virglrenderer-android' "$root/scripts/install.sh" \
+  || ! grep -Fq 'auto mode keeps the stable software renderer' "$root/scripts/start.sh"; then
+  printf '%s\n' 'experimental GPU must remain explicit and opt-in' >&2
+  status=1
+fi
+if ! grep -Fq 'Refusing to remove unowned file' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'return 1' "$root/scripts/lib/common.sh"; then
+  printf '%s\n' 'owned-file removal guard is missing' >&2
+  status=1
+fi
+if ! grep -Fq -- '--redact' "$root/scripts/diagnostics.sh"; then
+  printf '%s\n' 'diagnostic redaction option is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'fedora_resolve_memory_profile' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'FEDORA_MEMORY_PROFILE' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'MALLOC_ARENA_MAX' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'MALLOC_TRIM_THRESHOLD_' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq '2560x1600' "$root/fedora/gnome/fedora-session"; then
+  printf '%s\n' 'low-memory profile support is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'enable-animations=false' "$root/fedora/config/dconf.ini"; then
+  printf '%s\n' 'low-overhead GNOME defaults are missing' >&2
   status=1
 fi
 if ! grep -Fq 'fedora_config_override_names' "$root/scripts/lib/common.sh" \

@@ -39,6 +39,15 @@ validation; until then the project deliberately does not invent a digest.
 
 ## Device provenance
 
+## Observed target baseline
+
+The owner supplied console logs from a Samsung `SM-X930` running Android 16
+(API 36) on an `aarch64` host. The same logs show Fedora 44, GNOME/Mutter 50.4,
+PRoot-Distro 5.8.0 and `termux-x11-nightly` 1.03.01-6. This is useful release
+context, not a substitute for a complete redacted diagnostics report; the
+actual SoC properties, RAM, Vulkan device, panel mode and SELinux state remain
+device measurements.
+
 Run:
 
 ```bash

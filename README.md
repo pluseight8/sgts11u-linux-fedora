@@ -15,10 +15,11 @@ Knox, modem или EFS. Никакие команды из проекта не �
 Heimdall. Удаление контейнера и пользовательских файлов проекта не требует
 factory reset и не должно влиять на OTA Android.
 
-Аппаратный планшет в текущем окружении не подключён. Поэтому `STATUS.md` не
-содержит неподтверждённых заявлений `WORKING`: фактические `getprop`, GPU,
-touch, S Pen, audio, refresh pacing и suspend/resume нужно собрать на самом
-устройстве.
+По журналам, предоставленным владельцем устройства, подтверждены Samsung
+`SM-X930`, Android 16/API 36 и host `aarch64`. Это не заменяет полный probe:
+SoC properties, Vulkan, фактический renderer, touch/S Pen, audio, refresh
+pacing и suspend/resume всё равно нужно проверять на самом планшете; результаты
+разделены в `STATUS.md` на наблюдённые и неподтверждённые.
 
 ## Архитектура
 
@@ -92,7 +93,7 @@ scripts/install.sh       первоначальная установка Fedora 
 scripts/start.sh         запуск/переподключение display + GNOME
 scripts/stop.sh          остановка сессии проекта
 scripts/diagnostics.sh   отчёт Android/Termux/Fedora/GPU/Wayland
-scripts/update.sh        backup → dnf update → повторная проверка
+scripts/update.sh        backup → checkout/packages update → повторная проверка
 scripts/backup.sh        архив rootfs и host-конфигурации
 scripts/restore.sh       восстановление из архива
 scripts/reset.sh         удалить и заново создать только Fedora container
@@ -105,8 +106,9 @@ scripts/uninstall.sh     удалить только файлы проекта �
 Для обслуживания используйте:
 
 ```text
-scripts/update.sh             backup + Termux/Fedora package update
+scripts/update.sh             backup + clean checkout sync + Termux/Fedora update
 scripts/update.sh --no-termux только Fedora container
+scripts/update.sh --no-project не менять установленный control tree
 scripts/remove.sh --dry-run   preview удаления
 scripts/remove.sh              удалить Fedora Shell после подтверждения
 ```
@@ -122,6 +124,36 @@ audio/diagnose.sh                    Termux audio capability inventory
 integration/android-bridge.sh        allowlisted Android API/intent client
 ```
 
+## Память на планшете 12 GiB
+
+Профиль `FEDORA_MEMORY_PROFILE=auto` выбирает консервативный `low` при
+обнаружении примерно 12 GiB host RAM. Он сохраняет GNOME/Wayland, но не
+запускает без запроса необязательные `gnome-settings-daemon`, terminal,
+PipeWire и Tracker indexing; также ограничивает glibc arena growth и выключает
+анимации. Для nested Mutter автоматически выбирается виртуальный режим
+2560×1600, уменьшая compositor/Xwayland buffers; физическое Android-разрешение
+не изменяется. Это экономит RAM и заряд без попытки подменить Android memory
+manager.
+
+Включить конкретную возможность можно отдельно:
+
+```bash
+FEDORA_AUDIO_MODE=on FEDORA_SETTINGS_DAEMON=on \
+  FEDORA_LAUNCH_TERMINAL=on ./scripts/start.sh
+```
+
+`FEDORA_MEMORY_PROFILE=balanced` возвращает обычный набор GNOME helpers.
+Если ранее `low` отключил Tracker, верните его явно через
+`FEDORA_SEARCH_MODE=on`.
+
+Чтобы вернуть native/пользовательский виртуальный размер в low-профиле:
+
+```bash
+FEDORA_NESTED_MODE_SPECS=2960x1848 FEDORA_MEMORY_PROFILE=low ./scripts/start.sh
+```
+
+Linux swap не создаётся: zram/swap и reclaim принадлежат Android kernel.
+
 ## Что ещё не обещано
 
 PRoot не предоставляет настоящий kernel root, systemd PID 1, cgroups,
@@ -129,9 +161,10 @@ network namespaces или FUSE. Поэтому проект запускает s
 обычные user processes, а не имитирует полноценную bare-metal Fedora.
 
 GPU через `virglrenderer-android`/`virpipe` и альтернативный Zink/Vulkan путь
-являются экспериментальными для Mali/Immortalis. В режиме `auto` при отсутствии
-virgl проект выбирает стабильный `llvmpipe`, чтобы GNOME не зависел от
-непроверенного Android/Mesa backend. Пока `glxinfo -B`, `eglinfo`, `vulkaninfo`,
+являются экспериментальными для Mali/Immortalis. В режиме `auto` проект всегда
+выбирает стабильный `llvmpipe`; VirGL устанавливается только с
+`--experimental-gpu` и запускается лишь явным `FEDORA_GPU_MODE=virpipe`. Пока
+`glxinfo -B`, `eglinfo`, `vulkaninfo`,
 Mutter renderer и frame-pacing не проверены на конкретном устройстве, итоговый
 статус остаётся `UNTESTED` или `PARTIAL`; `llvmpipe`, `softpipe` и `lavapipe`
 не считаются аппаратным ускорением.

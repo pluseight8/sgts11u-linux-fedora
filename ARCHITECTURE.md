@@ -159,6 +159,16 @@ refresh mode. Fedora не создаёт второй security lock screen. `sta
 использует wakelock без необходимости; Termux/Termux:X11 battery optimization
 нужно настроить вручную на устройстве.
 
+Для 12 GiB RAM `FEDORA_MEMORY_PROFILE=auto` выбирает `low`: отключаются idle
+GNOME helpers (settings daemon, terminal, PipeWire и Tracker indexing),
+анимации выключены, nested monitor понижается до 2560×1600, а
+`MALLOC_ARENA_MAX`/`MALLOC_TRIM_THRESHOLD_` ограничивают fragmentation и
+удержание свободной heap-памяти в долгоживущих glibc-процессах. Это advisory
+profile, а не cgroup memory limit;
+Android по-прежнему управляет reclaim, zram и suspend. Опции можно включить
+точечно переменными `FEDORA_AUDIO_MODE`, `FEDORA_SETTINGS_DAEMON` и
+`FEDORA_LAUNCH_TERMINAL`.
+
 ## 8. Backup/recovery
 
 `proot-distro backup` архивирует rootfs и manifest; running process state не

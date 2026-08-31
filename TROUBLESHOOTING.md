@@ -135,17 +135,18 @@ FEDORA_ALLOW_X11=1 ./scripts/start.sh
 tail -n 120 "$HOME/.fedora-shell/logs/fedora-session.log"
 ```
 
-На устройствах без `virgl_test_server_android` штатный `auto` уже использует
-`llvmpipe`. Для явного повторного теста с минимальным числом необязательных
-служб:
+Штатный `auto` всегда использует `llvmpipe`, даже если optional
+`virgl_test_server_android` установлен. Для явного повторного теста с
+минимальным числом необязательных служб:
 
 ```bash
 FEDORA_GPU_MODE=software FEDORA_PORTAL_MODE=off ./scripts/start.sh
 ```
 
-Если после этого Shell работает, оставьте software mode либо отдельно
-проверяйте virpipe через `./gpu/scripts/probe-gpu.sh`; это не считается
-аппаратным ускорением.
+Если после этого Shell работает, оставьте software mode. VirGL проверяйте
+отдельно после `./scripts/install.sh --experimental-gpu`, затем
+`FEDORA_GPU_MODE=virpipe .../start.sh`; это не считается аппаратным
+ускорением без подтверждённого renderer.
 
 ## Renderer = llvmpipe/softpipe/lavapipe
 
@@ -168,6 +169,40 @@ vulkaninfo --summary
 Immortalis сначала проверяется host Vulkan, затем virpipe; Zink/Android Vulkan
 wrapper остаётся experimental.
 
+## Мало свободной RAM / 12 GiB
+
+Проверьте выбранный профиль и RSS процессов:
+
+```bash
+./scripts/diagnostics.sh --full --redact
+```
+
+На 12 GiB `auto` выбирает `low`: terminal, PipeWire, Tracker и settings daemon
+не стартуют автоматически, а nested monitor обычно работает в 2560×1600.
+Это ожидаемая оптимизация. Включайте только то, что нужно для текущей задачи:
+
+```bash
+FEDORA_AUDIO_MODE=on ./scripts/start.sh
+FEDORA_SETTINGS_DAEMON=on FEDORA_LAUNCH_TERMINAL=on ./scripts/start.sh
+```
+
+Если нужен обычный полный desktop-профиль:
+
+```bash
+FEDORA_MEMORY_PROFILE=balanced ./scripts/start.sh
+# восстановить Tracker после low-профиля только при необходимости:
+FEDORA_MEMORY_PROFILE=balanced FEDORA_SEARCH_MODE=on ./scripts/start.sh
+```
+
+Native virtual mode можно вернуть отдельно, не меняя Android display:
+
+```bash
+FEDORA_MEMORY_PROFILE=low FEDORA_NESTED_MODE_SPECS=2960x1848 ./scripts/start.sh
+```
+
+Не создавайте swap-файл внутри PRoot: это не добавит Android kernel swap и
+может только занять место/ухудшить latency.
+
 ## PRoot/D-Bus/systemd ошибки
 
 Не запускайте `systemctl` как доказательство исправности. PRoot не даёт
@@ -179,10 +214,11 @@ wrapper остаётся experimental.
 по-прежнему недоступны; их предупреждения ожидаемы.
 
 Сообщение `fuse: failed to open /dev/fuse` относится к document portal:
-Android/PRoot обычно не может предоставить FUSE mount. В `FEDORA_PORTAL_MODE=auto`
-порталы теперь пропускаются автоматически, `GIO_USE_VFS=local` предотвращает
-лишнюю активацию GVFS, а supervisor также блокирует D-Bus auto-activation
-portal/document services. GNOME desktop продолжает запускаться. Принудительный
+Android/PRoot обычно не может предоставить FUSE mount. В
+`FEDORA_PORTAL_MODE=auto` порталы пропускаются автоматически, а
+`GIO_USE_VFS=local` предотвращает лишний GVFS. GNOME может всё ещё попытаться
+проверить portal через D-Bus, поэтому в логах допустимы `AccessDenied` или
+`ServiceUnknown`; это не должно останавливать desktop. Принудительный
 `FEDORA_PORTAL_MODE=on` имеет смысл только после
 проверки доступности FUSE и может снова вернуть эту ошибку.
 

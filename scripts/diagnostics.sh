@@ -9,6 +9,7 @@ source "$FEDORA_ENTRY_DIR/lib/common.sh"
 MODE=quick
 INCLUDE_FEDORA=1
 FRAME_PACING=0
+REDACT=0
 
 usage() {
   cat >&2 <<'EOF'
@@ -20,6 +21,7 @@ Options:
   --fedora            include Fedora guest probes
   --no-fedora         skip guest probes
   --frame-pacing      append the frame-pacing proxy report
+  --redact            redact common identifiers and private paths before sharing
   -h, --help          show this help
 EOF
 }
@@ -31,6 +33,7 @@ while (( $# > 0 )); do
     --fedora) INCLUDE_FEDORA=1; shift ;;
     --no-fedora) INCLUDE_FEDORA=0; shift ;;
     --frame-pacing) FRAME_PACING=1; shift ;;
+    --redact) REDACT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage; fedora_die "Unknown option: $1"; exit 64 ;;
   esac
@@ -56,6 +59,72 @@ capture() {
   } >> "$report" 2>&1
 }
 
+android_setting() {
+  local namespace="$1"
+  local key="$2"
+  if [[ -x /system/bin/settings ]]; then
+    /system/bin/settings get "$namespace" "$key" 2>/dev/null || true
+  else
+    printf '%s\n' unknown
+  fi
+}
+
+android_package_state() {
+  local package_name="$1"
+  local package_rc
+  if fedora_android_package_installed "$package_name"; then
+    printf '%s\n' yes
+  else
+    package_rc=$?
+    if (( package_rc == 2 )); then
+      printf '%s\n' unknown
+    else
+      printf '%s\n' no
+    fi
+  fi
+}
+
+process_memory_snapshot() {
+  command -v ps >/dev/null 2>&1 || return 1
+  # RSS is useful for pressure triage but double-counts shared libraries.
+  # Include PSS from smaps_rollup when Android permits it, so the report also
+  # has a closer estimate of the memory attributed to each process.
+  local count=0 total_rss=0 total_pss=0 pid rss args pss
+  while read -r pid rss args; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    case "$args" in
+      *gnome-shell*|*mutter-devkit*|*ptyxis*|*gnome-console*|*gnome-settings-daemon*|*pipewire*|*wireplumber*|*xdg-desktop-portal*|*localsearch*|*tracker*) ;;
+      *) continue ;;
+    esac
+    pss="$(awk '/^Pss:/ { print $2; exit }' "/proc/$pid/smaps_rollup" 2>/dev/null || true)"
+    [[ "$pss" =~ ^[0-9]+$ ]] || pss=unknown
+    printf 'pid=%s rss_kib=%s pss_kib=%s cmd=%s\n' "$pid" "$rss" "$pss" "$args"
+    total_rss=$((total_rss + rss))
+    if [[ "$pss" =~ ^[0-9]+$ ]]; then
+      total_pss=$((total_pss + pss))
+    fi
+    count=$((count + 1))
+  done < <(ps -eo pid=,rss=,args= 2>/dev/null)
+  printf 'matched_processes=%d total_rss_kib=%d total_pss_kib=%d\n' \
+    "$count" "$total_rss" "$total_pss"
+}
+
+selinux_state="unknown"
+if fedora_have_cmd getenforce; then
+  selinux_state="$(getenforce 2>/dev/null || true)"
+elif [[ -r /sys/fs/selinux/enforce ]]; then
+  selinux_state="$(< /sys/fs/selinux/enforce)"
+fi
+x11_socket="$FEDORA_TERMUX_PREFIX/tmp/.X11-unix/X${FEDORA_DISPLAY#:}"
+x11_pid=""
+if [[ -f "$FEDORA_PID_DIR/termux-x11.pid" ]]; then
+  x11_pid="$(sed -n '1p' "$FEDORA_PID_DIR/termux-x11.pid" 2>/dev/null || true)"
+fi
+virgl_installed=no
+if fedora_have_cmd virgl_test_server_android; then
+  virgl_installed=yes
+fi
+
 {
   printf 'fedora-shell-diagnostics-v1\n'
   printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -63,10 +132,34 @@ capture() {
   printf 'termux_version=%s\n' "${TERMUX_VERSION:-unknown}"
   printf 'uname=%s\n' "$(uname -a 2>/dev/null || true)"
   printf 'uname_m=%s\n' "$(uname -m 2>/dev/null || true)"
+  printf 'manufacturer=%s\n' "$(fedora_getprop ro.product.manufacturer)"
   printf 'model=%s\n' "$(fedora_getprop ro.product.model)"
+  printf 'device_codename=%s\n' "$(fedora_getprop ro.product.device)"
   printf 'android_release=%s\n' "$(fedora_getprop ro.build.version.release)"
   printf 'android_api=%s\n' "$(fedora_getprop ro.build.version.sdk)"
+  printf 'security_patch=%s\n' "$(fedora_getprop ro.build.version.security_patch)"
   printf 'board=%s\n' "$(fedora_getprop ro.board.platform)"
+  printf 'hardware=%s\n' "$(fedora_getprop ro.hardware)"
+  printf 'soc_model=%s\n' "$(fedora_getprop ro.soc.model)"
+  printf 'kernel_release=%s\n' "$(uname -r 2>/dev/null || true)"
+  printf 'ram_kib=%s\n' "$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
+  printf 'memory_profile=%s\n' "$FEDORA_MEMORY_PROFILE"
+  printf 'settings_daemon=%s\n' "$FEDORA_SETTINGS_DAEMON"
+  printf 'launch_terminal=%s\n' "$FEDORA_LAUNCH_TERMINAL"
+  printf 'keyring_mode=%s\n' "$FEDORA_KEYRING_MODE"
+  printf 'search_mode=%s\n' "$FEDORA_SEARCH_MODE"
+  printf 'selinux=%s\n' "$selinux_state"
+  printf 'display=%s\n' "$FEDORA_DISPLAY"
+  printf 'peak_refresh_rate=%s\n' "$(android_setting system peak_refresh_rate)"
+  printf 'min_refresh_rate=%s\n' "$(android_setting system min_refresh_rate)"
+  printf 'termux_x11_package=%s\n' "$(fedora_have_cmd termux-x11 && echo yes || echo no)"
+  printf 'termux_x11_apk=%s\n' "$(android_package_state com.termux.x11)"
+  printf 'termux_x11_socket=%s\n' "$( [[ -S "$x11_socket" ]] && echo present || echo absent )"
+  printf 'termux_x11_pid=%s\n' "${x11_pid:-unknown}"
+  printf 'virgl_server=%s\n' "$virgl_installed"
+  printf 'gpu_mode=%s\n' "$FEDORA_GPU_MODE"
+  printf 'portal_mode=%s\n' "$FEDORA_PORTAL_MODE"
+  printf 'redacted=%s\n' "$([[ $REDACT -eq 1 ]] && echo yes || echo no)"
   printf 'state_dir=%s\n' "$FEDORA_STATE_DIR"
   printf 'install_root=%s\n' "$FEDORA_INSTALL_ROOT"
   printf 'container=%s\n' "$FEDORA_CONTAINER"
@@ -91,6 +184,7 @@ if [[ "$MODE" == full ]]; then
   capture 'Termux info' termux-info
   capture 'installed Termux packages' pkg list-installed
   capture 'Termux:X11 preferences' termux-x11-preference list
+  capture 'host process RSS snapshot' process_memory_snapshot
   if [[ -x /system/bin/dumpsys ]]; then
     capture 'Android display' /system/bin/dumpsys display || true
     capture 'SurfaceFlinger' /system/bin/dumpsys SurfaceFlinger || true
@@ -135,6 +229,25 @@ if (( FRAME_PACING )); then
   fi
 fi
 
+if (( REDACT )); then
+  redacted_report="${report}.redacted.$$"
+  if sed -E \
+    -e 's#(/data/data/[^[:space:]]+)#<termux-private-path>#g' \
+    -e 's#(/home/[^[:space:]]+)#<home-path>#g' \
+    -e 's#(\[?[^]]*(serial(no)?|imei|imsi|meid|ssid|bssid)[^]]*\]?[[:space:]]*[:=][[:space:]]*)[^[:space:]]+#\1<redacted>#Ig' \
+    -e 's#((serial(no)?|imei|imsi|meid|ssid|bssid|android_id)[^:=]*[=:][[:space:]]*)[^[:space:]]+#\1<redacted>#Ig' \
+    "$report" > "$redacted_report"; then
+    mv -- "$redacted_report" "$report"
+  else
+    rm -f -- "$redacted_report"
+    fedora_warn "Could not create the redacted report; keep the full report private."
+  fi
+fi
+
 chmod 600 "$report"
 printf 'report=%s\n' "$report"
-printf '%s\n' 'Redact serial/IMEI/SSID/private paths before sharing a full report.'
+if (( REDACT )); then
+  printf '%s\n' 'Report was redacted with best-effort filters; inspect it once before sharing.'
+else
+  printf '%s\n' 'Use --redact before sharing; a full report may contain serial/IMEI/SSID/private paths.'
+fi

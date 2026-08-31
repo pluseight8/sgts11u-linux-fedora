@@ -24,6 +24,8 @@ Options:
   --allow-unknown-device pass --allow-unknown-device to the installer
   --enable-boot           pass --enable-boot to the installer
   --skip-x11-package      pass --skip-x11-package to the installer
+  --experimental-gpu      pass --experimental-gpu to the installer
+  --memory-profile NAME   pass --memory-profile NAME to the installer
   --min-free-gib N        pass --min-free-gib N to the installer
   -h, --help              show this help
 
@@ -49,9 +51,14 @@ while (( $# > 0 )); do
       RUN_INSTALL=0
       shift
       ;;
-    --yes|--allow-unknown-device|--enable-boot|--skip-x11-package)
+    --yes|--allow-unknown-device|--enable-boot|--skip-x11-package|--experimental-gpu)
       INSTALL_ARGS+=("$1")
       shift
+      ;;
+    --memory-profile)
+      (( $# >= 2 )) || { usage; exit 64; }
+      INSTALL_ARGS+=("$1" "$2")
+      shift 2
       ;;
     --min-free-gib)
       (( $# >= 2 )) || { usage; exit 64; }

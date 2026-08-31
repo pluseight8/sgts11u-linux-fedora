@@ -1,8 +1,10 @@
 # Статус на 2026-08-31
 
-Статус отражает код и исследование, а не результат на подключённом планшете.
-Устройство в текущем окружении не подключено. Не меняйте `UNTESTED` на
-`WORKING` без приложенного лога/команды проверки.
+Статус отражает код и журналы владельца устройства на 2026-08-31. Полного
+redacted diagnostics-файла нет, поэтому факты из консольного вывода отмечены
+как наблюдённые, а аппаратные свойства, которых в нём нет, остаются
+`UNTESTED`. Не меняйте `PARTIAL`/`UNTESTED` на `WORKING` без повторяемого
+теста на самом планшете.
 
 Допустимые значения: `WORKING`, `PARTIAL`, `ANDROID-BRIDGED`, `BROKEN`,
 `UNSUPPORTED`, `UNTESTED`.
@@ -11,21 +13,21 @@
 
 | Component | Method | Status | Evidence / next test |
 | --- | --- | --- | --- |
-| Fedora ARM64 | official `fedora:44`, PRoot-Distro | PARTIAL | install path exists; run `uname -m`, `/etc/fedora-release` |
-| GNOME Shell | Fedora package, nested session | UNTESTED | run `scripts/start.sh` |
-| Mutter | nested Wayland compositor | UNTESTED | check `gnome-shell --help`, logs |
-| GNOME apps | Fedora RPMs | UNTESTED | launch Nautilus/Settings/Console |
+| Fedora ARM64 | official `fedora:44`, PRoot-Distro | WORKING | user log: image installed and Fedora package transaction completed; rerun `diagnostics.sh --fedora` after updates |
+| GNOME Shell | Fedora package, nested session | PARTIAL | user log: `gnome-shell --wayland --devkit` publishes `wayland-0`, but visible output is black; no successful visual acceptance yet |
+| Mutter | nested Wayland compositor | PARTIAL | user log: Mutter Devkit starts, creates Wayland socket and surfaceless renderer; verify visible frame |
+| GNOME apps | Fedora RPMs | PARTIAL | user log: Ptyxis starts; desktop surface remains black |
 | D-Bus session | `dbus-run-session` | PARTIAL | process setup exists; inspect session bus |
 | PipeWire | user process | UNTESTED | `pw-cli info 0`, audio test |
 | WirePlumber | user process | UNTESTED | process/log check |
-| xdg portals | user process | UNTESTED | portal smoke test |
-| Display transport | Termux:X11 | PARTIAL | official PRoot shared-tmp path; device test pending |
-| GNOME session | Wayland | UNTESTED | `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY` |
-| GTK apps | Wayland first | UNTESTED | `GDK_BACKEND`, app window protocol |
+| xdg portals | user process | PARTIAL | `/dev/fuse` denied under Android; use `FEDORA_PORTAL_MODE=off`, then test file chooser separately |
+| Display transport | Termux:X11 | PARTIAL | user log: stale process once had no X0 socket; next run published desktop; visible frame still black |
+| GNOME session | Wayland | PARTIAL | user log: `Desktop session: Wayland (wayland-0) ... transport: X11 (:0)` |
+| GTK apps | Wayland first | PARTIAL | Ptyxis activation observed; verify a normal GTK window after legacy drawing fix |
 | Qt apps | Wayland first | UNTESTED | `QT_QPA_PLATFORM` and Qt app |
 | XWayland | legacy compatibility | UNTESTED | launch X11-only app |
-| GPU acceleration | virpipe / optional Zink | UNTESTED | renderer must not be llvmpipe |
-| OpenGL | Mesa | UNTESTED | `glxinfo -B`, `eglinfo` |
+| GPU acceleration | virpipe / optional Zink | PARTIAL | user log: `Created surfaceless renderer without GPU` and Xwayland software fallback; hardware acceleration is not proven |
+| OpenGL | Mesa | PARTIAL | software path observed; run `glxinfo -B`/`eglinfo` for exact renderer |
 | Vulkan | Android wrapper / native probe | UNTESTED | `vulkaninfo --summary` |
 | Firefox | Wayland | UNTESTED | `about:support` → Window Protocol |
 | Chromium/Electron | Ozone Wayland | UNTESTED | inspect actual backend |
@@ -53,19 +55,40 @@
 | Notifications | optional Android bridge | UNTESTED | no listener enabled by default |
 | Suspend/resume | Android-owned lifecycle | UNTESTED | screen off/wake/reconnect |
 | Flatpak | namespaces/bwrap in PRoot | UNSUPPORTED | use RPM/AppImage unless tested |
-| Fedora update | backup + `dnf upgrade` | PARTIAL | major release upgrade intentionally excluded |
+| Fedora update | backup + `dnf upgrade` | PARTIAL | user log: package update completes; project-tree synchronization is now included |
+| Memory profile | auto → low on ~12 GiB host | WORKING (policy) | low profile disables idle helpers, uses 2560×1600 nested mode, trims glibc arenas and records RSS/PSS; measure actual savings with `diagnostics.sh --full --redact` |
 | Backup/restore | PRoot archive + host state | PARTIAL | run restore verification on device |
 | Reset/uninstall | scoped container/file removal | PARTIAL | script safety tests; device dry run pending |
 | Android launcher APK | Home/emergency UI + Termux RUN_COMMAND | UNTESTED | build/install and permission test pending |
 | Android bridge client | allowlisted Termux:API/intents | PARTIAL | shell/API paths exist; Android permission test pending |
 
+## Наблюдённый baseline устройства
+
+| Fact | Value | Evidence |
+| --- | --- | --- |
+| Manufacturer/model | Samsung `SM-X930` | user-provided installer log |
+| Android | 16 / API 36 | user-provided installer log |
+| Host architecture | `aarch64` | user-provided installer log |
+| Free space at install | 319880192 KiB (later 318674260 KiB) | user-provided installer log |
+| Fedora userspace | `fedora:44`, `aarch64` | user-provided PRoot-Distro log |
+| GNOME/Mutter | 50.4 on Fedora 44 | user-provided Fedora package/log output |
+| Termux:X11 package | `1.03.01-6` nightly | user-provided package output |
+| GPU state observed | no hardware renderer; surfaceless/software fallback | user-provided `fedora-session.log` |
+
+This baseline does not include `ro.soc.model`, panel mode, Vulkan device,
+RAM, SELinux state or a redacted full report. Collect them with:
+
+```bash
+./scripts/diagnostics.sh --full --redact --frame-pacing
+```
+
 ## Wayland-specific status
 
 | Component | Backend | Status |
 | --- | --- | --- |
-| GNOME Session | Wayland nested | UNTESTED |
-| Mutter | Wayland compositor | UNTESTED |
-| GTK apps | Wayland | UNTESTED |
+| GNOME Session | Wayland nested | PARTIAL |
+| Mutter | Wayland compositor | PARTIAL |
+| GTK apps | Wayland | PARTIAL |
 | Qt apps | Wayland | UNTESTED |
 | Firefox | Wayland | UNTESTED |
 | Chromium | Wayland/Ozone | UNTESTED |
@@ -73,7 +96,7 @@
 | Touch | Wayland input via transport | UNTESTED |
 | S Pen | Wayland tablet/input | UNTESTED |
 | Clipboard | Wayland ↔ Android | UNTESTED |
-| GPU acceleration | Wayland/EGL/Vulkan | UNTESTED |
+| GPU acceleration | Wayland/EGL/Vulkan | PARTIAL |
 | 120 Hz presentation | Wayland frame pacing | UNTESTED |
 | Android Home integration | user-selected Home + emergency controls | UNTESTED |
 

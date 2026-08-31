@@ -65,11 +65,13 @@ under_allowed_file_root() {
   local candidate="$1"
   local shared_root="$FEDORA_HOME/storage/shared"
   local bridge_root="$FEDORA_HOME/.fedora-shell/share"
-  if command -v realpath >/dev/null 2>&1; then
-    candidate="$(realpath -- "$candidate" 2>/dev/null || printf '%s' "$candidate")"
-    shared_root="$(realpath -- "$shared_root" 2>/dev/null || printf '%s' "$shared_root")"
-    bridge_root="$(realpath -- "$bridge_root" 2>/dev/null || printf '%s' "$bridge_root")"
-  fi
+  # A lexical prefix check is bypassable with symlinks and `..`. Fail closed
+  # when canonicalization is unavailable instead of silently weakening the
+  # allowlist.
+  command -v realpath >/dev/null 2>&1 || return 1
+  candidate="$(realpath -- "$candidate" 2>/dev/null)" || return 1
+  shared_root="$(realpath -- "$shared_root" 2>/dev/null)" || return 1
+  bridge_root="$(realpath -- "$bridge_root" 2>/dev/null)" || return 1
   [[ "$candidate" == "$shared_root"/* || "$candidate" == "$bridge_root"/* ]]
 }
 
@@ -185,7 +187,11 @@ case "$command_name" in
     exec termux-vibrate -d "$duration"
     ;;
   launch-camera)
-    package_name="$(read_app_package camera)"
+    package_name="$(read_app_package camera || true)"
+    [[ "$package_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$ ]] || {
+      printf '%s\n' 'Camera package is missing or invalid in the allowlist' >&2
+      exit 64
+    }
     am_bin="$(android_bin am)"
     exec "$am_bin" start -a android.media.action.IMAGE_CAPTURE -p "$package_name"
     ;;

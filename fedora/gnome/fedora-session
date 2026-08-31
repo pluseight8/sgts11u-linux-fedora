@@ -11,6 +11,12 @@ FEDORA_NESTED_SCALE="${FEDORA_NESTED_SCALE:-1}"
 FEDORA_NESTED_MODE="${FEDORA_NESTED_MODE:-auto}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
 FEDORA_PORTAL_MODE="${FEDORA_PORTAL_MODE:-auto}"
+FEDORA_MEMORY_PROFILE="${FEDORA_MEMORY_PROFILE:-balanced}"
+FEDORA_AUDIO_MODE="${FEDORA_AUDIO_MODE:-auto}"
+FEDORA_SETTINGS_DAEMON="${FEDORA_SETTINGS_DAEMON:-auto}"
+FEDORA_LAUNCH_TERMINAL="${FEDORA_LAUNCH_TERMINAL:-auto}"
+FEDORA_KEYRING_MODE="${FEDORA_KEYRING_MODE:-auto}"
+FEDORA_SEARCH_MODE="${FEDORA_SEARCH_MODE:-auto}"
 
 mkdir -p "$FEDORA_SESSION_RUNTIME" "$(dirname -- "$FEDORA_SESSION_LOG")"
 chmod 700 "$FEDORA_SESSION_RUNTIME" 2>/dev/null || true
@@ -39,6 +45,27 @@ session_die() {
   session_log "ERROR: $*"
   exit 1
 }
+
+configure_memory_profile() {
+  [[ "$FEDORA_MEMORY_PROFILE" == low ]] || return 0
+
+  # Apply these before dbus-run-session so D-Bus-activated GNOME helpers inherit
+  # the same allocator policy as the shell and supervisor-launched processes.
+  # These are RSS/fragmentation guards, not a hard process memory limit or an
+  # Android kernel control.
+  export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+  export MALLOC_TRIM_THRESHOLD_="${MALLOC_TRIM_THRESHOLD_:-131072}"
+
+  # The tablet's Android panel is not changed. This only selects the virtual
+  # monitor used by nested Mutter, reducing compositor/Xwayland buffers while
+  # keeping the panel's aspect ratio. An explicit mode spec always wins.
+  if [[ -z "${FEDORA_NESTED_MODE_SPECS:-}" ]]; then
+    FEDORA_NESTED_MODE_SPECS=2560x1600
+    export FEDORA_NESTED_MODE_SPECS
+    session_log "Low-memory profile uses a 2560x1600 virtual monitor; set FEDORA_NESTED_MODE_SPECS to override"
+  fi
+}
+configure_memory_profile
 
 portal_fuse_available() {
   [[ -c /dev/fuse ]] || return 1
@@ -121,12 +148,74 @@ export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
 export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
 export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-auto}"
 
+session_option_enabled() {
+  local requested="$1"
+  case "$requested" in
+    on|enabled|1|true|yes) return 0 ;;
+    off|disabled|none|0|false|no) return 1 ;;
+    auto) [[ "$FEDORA_MEMORY_PROFILE" != low ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+configure_search_mode() {
+  local mode="$FEDORA_SEARCH_MODE"
+  if [[ "$mode" == auto ]]; then
+    if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
+      mode=off
+    else
+      session_log "GNOME search indexing left at the user's current setting"
+      return 0
+    fi
+  fi
+  case "$mode" in
+    off|disabled|none)
+      session_log "GNOME search indexing disabled for memory profile $FEDORA_MEMORY_PROFILE"
+      if command -v gsettings >/dev/null 2>&1; then
+        gsettings set org.freedesktop.Tracker3.Miner.Files enable-monitors false \
+          >> "$FEDORA_SESSION_LOG" 2>&1 || true
+        gsettings set org.freedesktop.Tracker3.Miner.Files crawling-interval -2 \
+          >> "$FEDORA_SESSION_LOG" 2>&1 || true
+        gsettings set org.gnome.desktop.search-providers disable-external true \
+          >> "$FEDORA_SESSION_LOG" 2>&1 || true
+      fi
+      if command -v tracker3 >/dev/null 2>&1; then
+        tracker3 daemon --terminate >> "$FEDORA_SESSION_LOG" 2>&1 || true
+      fi
+      ;;
+    on|enabled)
+      session_log "GNOME search indexing explicitly enabled"
+      if command -v gsettings >/dev/null 2>&1; then
+        gsettings set org.freedesktop.Tracker3.Miner.Files enable-monitors true \
+          >> "$FEDORA_SESSION_LOG" 2>&1 || true
+        gsettings set org.freedesktop.Tracker3.Miner.Files crawling-interval 15 \
+          >> "$FEDORA_SESSION_LOG" 2>&1 || true
+      fi
+      ;;
+    *)
+      session_log "Unknown FEDORA_SEARCH_MODE=$FEDORA_SEARCH_MODE; leaving search indexing unchanged"
+      ;;
+  esac
+}
+
+session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE"
+configure_search_mode
+
 child_pids=()
 cleanup() {
-  local pid
+  local pid tries
   for pid in "${child_pids[@]:-}"; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
+      tries=0
+      while kill -0 "$pid" 2>/dev/null && (( tries < 20 )); do
+        sleep 0.1
+        ((tries += 1))
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+      wait "$pid" 2>/dev/null || true
     fi
   done
   rm -f -- "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
@@ -151,9 +240,33 @@ start_optional() {
 
 # PipeWire and portals are user processes here. They may still fail if the
 # Android/Termux audio transport or required kernel feature is unavailable.
-start_optional pipewire
-start_optional wireplumber
-start_optional pipewire-pulse
+# On a 12 GiB tablet, `auto` keeps the audio stack off unless it is explicitly
+# requested; the GNOME desktop itself does not need three idle audio daemons.
+start_audio_stack() {
+  case "$FEDORA_AUDIO_MODE" in
+    off|disabled|none)
+      session_log "Audio stack disabled (FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE)"
+      ;;
+    on|enabled)
+      start_optional pipewire
+      start_optional wireplumber
+      start_optional pipewire-pulse
+      ;;
+    auto)
+      if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
+        session_log "Audio stack skipped by low memory profile; use FEDORA_AUDIO_MODE=on to enable it"
+      else
+        start_optional pipewire
+        start_optional wireplumber
+        start_optional pipewire-pulse
+      fi
+      ;;
+    *)
+      session_log "Unknown FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE; audio stack disabled"
+      ;;
+  esac
+}
+start_audio_stack
 
 start_desktop_portals() {
   case "$FEDORA_PORTAL_MODE" in
@@ -187,7 +300,33 @@ start_desktop_portals() {
 start_desktop_portals
 
 if command -v gnome-keyring-daemon >/dev/null 2>&1; then
-  keyring_env="$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null || true)"
+  keyring_components=""
+  case "$FEDORA_KEYRING_MODE" in
+    off|disabled|none)
+      session_log "GNOME keyring disabled (FEDORA_KEYRING_MODE=$FEDORA_KEYRING_MODE)"
+      ;;
+    secrets)
+      keyring_components=secrets
+      ;;
+    on|enabled|all)
+      keyring_components=secrets,ssh
+      ;;
+    auto)
+      if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
+        keyring_components=secrets
+      else
+        keyring_components=secrets,ssh
+      fi
+      ;;
+    *)
+      session_log "Unknown FEDORA_KEYRING_MODE=$FEDORA_KEYRING_MODE; keyring disabled"
+      ;;
+  esac
+  if [[ -n "$keyring_components" ]]; then
+    keyring_env="$(gnome-keyring-daemon --start --components="$keyring_components" 2>/dev/null || true)"
+  else
+    keyring_env=""
+  fi
   if [[ -n "$keyring_env" ]]; then
     # The command emits shell assignments from the trusted Fedora package.
     eval "$keyring_env"
@@ -270,6 +409,27 @@ launch_terminal() {
   child_pids+=("$!")
 }
 
+start_settings_daemon() {
+  if ! session_option_enabled "$FEDORA_SETTINGS_DAEMON"; then
+    session_log "gnome-settings-daemon skipped by memory profile $FEDORA_MEMORY_PROFILE; set FEDORA_SETTINGS_DAEMON=on to enable it"
+    return 0
+  fi
+  if command -v gnome-settings-daemon >/dev/null 2>&1; then
+    gnome-settings-daemon --replace >> "$FEDORA_SESSION_LOG" 2>&1 &
+    child_pids+=("$!")
+  else
+    session_log "optional process not installed: gnome-settings-daemon"
+  fi
+}
+
+start_session_terminal() {
+  if session_option_enabled "$FEDORA_LAUNCH_TERMINAL"; then
+    launch_terminal
+  else
+    session_log "Automatic GNOME terminal launch skipped by memory profile $FEDORA_MEMORY_PROFILE; open it from the overview or set FEDORA_LAUNCH_TERMINAL=on"
+  fi
+}
+
 run_wayland_devkit() {
   has_option gnome-shell --devkit || return 1
   has_option gnome-shell --wayland || return 1
@@ -326,11 +486,8 @@ run_wayland_devkit() {
   chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
   session_log "Desktop session: Wayland ($WAYLAND_DISPLAY) via Mutter Devkit; transport: X11 ($DISPLAY)"
 
-  if command -v gnome-settings-daemon >/dev/null 2>&1; then
-    gnome-settings-daemon --replace >> "$FEDORA_SESSION_LOG" 2>&1 &
-    child_pids+=("$!")
-  fi
-  launch_terminal
+  start_settings_daemon
+  start_session_terminal
   shell_rc=0
   wait "$shell_pid" || shell_rc=$?
   if (( shell_rc != 0 )); then
@@ -389,60 +546,12 @@ run_wayland_nested() {
   chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
   session_log "Desktop session: Wayland ($WAYLAND_DISPLAY); transport: X11 ($DISPLAY)"
 
-  if command -v gnome-settings-daemon >/dev/null 2>&1; then
-    gnome-settings-daemon --replace >> "$FEDORA_SESSION_LOG" 2>&1 &
-    child_pids+=("$!")
-  fi
-  launch_terminal
+  start_settings_daemon
+  start_session_terminal
   shell_rc=0
   wait "$shell_pid" || shell_rc=$?
   if (( shell_rc != 0 )); then
     report_process_exit "GNOME Shell nested Wayland" "$shell_rc"
-    return 125
-  fi
-  return 0
-}
-
-run_mutter_nested() {
-  command -v mutter >/dev/null 2>&1 || return 1
-  has_option mutter --nested || return 1
-  local before compositor_pid nested_display compositor_rc killed
-  before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
-  session_log "GNOME Shell nested option unavailable; trying Mutter Wayland transport (PARTIAL)"
-  unset WAYLAND_DISPLAY
-  mutter --wayland --nested >> "$FEDORA_SESSION_LOG" 2>&1 &
-  compositor_pid="$!"
-  child_pids+=("$compositor_pid")
-  if ! nested_display="$(wait_for_nested_socket "$before" "$compositor_pid")"; then
-    session_log "Mutter did not publish a nested Wayland socket"
-    killed=0
-    if kill -0 "$compositor_pid" 2>/dev/null; then
-      kill "$compositor_pid" 2>/dev/null || true
-      killed=1
-    fi
-    compositor_rc=0
-    wait "$compositor_pid" 2>/dev/null || compositor_rc=$?
-    if (( ! killed && compositor_rc != 0 )); then
-      report_process_exit "Mutter nested compositor" "$compositor_rc"
-      return 125
-    fi
-    return 1
-  fi
-  export WAYLAND_DISPLAY="$nested_display"
-  export XDG_SESSION_TYPE=wayland
-  {
-    printf 'WAYLAND_DISPLAY=%q\n' "$WAYLAND_DISPLAY"
-    printf 'XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
-    printf 'XDG_SESSION_TYPE=%q\n' "$XDG_SESSION_TYPE"
-    printf 'DISPLAY=%q\n' "$DISPLAY"
-  } > "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
-  chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
-  session_log "Desktop transport is Wayland, but GNOME Shell is not running"
-  launch_terminal
-  compositor_rc=0
-  wait "$compositor_pid" || compositor_rc=$?
-  if (( compositor_rc != 0 )); then
-    report_process_exit "Mutter nested compositor" "$compositor_rc"
     return 125
   fi
   return 0
@@ -498,26 +607,10 @@ case "$FEDORA_NESTED_MODE" in
     if [[ "$FEDORA_NESTED_MODE" == wayland ]]; then
       session_die "GNOME nested Wayland is unavailable; refusing silent X11 fallback"
     fi
-    if run_mutter_nested; then
-      exit 0
-    else
-      mutter_rc=$?
-    fi
-    if (( mutter_rc == 125 )); then
-      session_die "Mutter nested compositor crashed; see $FEDORA_SESSION_LOG"
-    fi
+    session_log "Mutter-only nested transport is not a GNOME desktop; refusing to report it as a successful session"
     ;;
   mutter)
-    if run_mutter_nested; then
-      exit 0
-    else
-      mutter_rc=$?
-    fi
-    if (( mutter_rc == 125 )); then
-      session_die "Mutter nested compositor crashed; see $FEDORA_SESSION_LOG"
-    fi
-    session_die "Mutter nested Wayland is unavailable"
-    exit 0
+    session_die "FEDORA_NESTED_MODE=mutter is transport-only and cannot provide GNOME Shell; use wayland or auto"
     ;;
   x11)
     if run_x11_fallback; then

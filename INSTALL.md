@@ -57,7 +57,7 @@ Installer:
 
 1. собирает фактический device/Termux report;
 2. отказывается работать в root shell и на не-ARM64 host;
-3. проверяет модель (`SM-X930`/`SM-X936*`), либо требует
+3. проверяет модель (`SM-X930`/`SM-X936`), либо требует
    `--allow-unknown-device` для исследовательского запуска;
 4. ставит `proot-distro`, `x11-repo`, `termux-x11-nightly` и bridge CLI;
 5. скачивает `fedora:44` с `--architecture aarch64` через OCI registry;
@@ -84,6 +84,8 @@ git pull --ff-only
 --allow-unknown-device   продолжить, если ro.product.model неизвестен
 --enable-boot            установить ~/.termux/boot/fedora-shell
 --skip-x11-package       не ставить termux-x11-nightly package
+--experimental-gpu       установить optional virglrenderer-android, но не включать его в auto
+--memory-profile NAME    auto, low, balanced или performance
 --min-free-gib N         изменить минимальное свободное место
 ```
 
@@ -91,7 +93,7 @@ git pull --ff-only
 через `git pull --ff-only`; локальные изменения он не трогает. Bootstrap
 поддерживает `--dir DIRECTORY`, `--ref REF`, `--no-install` и
 передаёт installer-флаги `--yes`, `--allow-unknown-device`, `--enable-boot`,
-`--skip-x11-package`, `--min-free-gib N`.
+`--skip-x11-package`, `--experimental-gpu`, `--min-free-gib N`.
 
 Флаг `--enable-boot` не превращает Android в Linux init. Termux:Boot запускает
 скрипт best-effort после boot, но Android background restrictions и Samsung
@@ -108,10 +110,12 @@ battery policy могут потребовать ручной настройки
 
 * display — `:0`;
 * Termux:X11 запускается отдельно;
+* для SM-X930 включён совместимый `-legacy-drawing`, чтобы избежать чёрной
+  поверхности; отключение для A/B-проверки: `TERMUX_X11_LEGACY_DRAWING=0`;
 * `--shared-tmp` и `--shared-x11` передаются PRoot;
 * `/storage/emulated/0` bind-ится как `/home/fedora/Android`, если доступен;
-* GPU mode `auto` использует `virgl_test_server_android`, если он установлен;
-  иначе принудительно выбирается стабильный Mesa `llvmpipe` software fallback;
+* GPU mode `auto` всегда выбирает стабильный Mesa `llvmpipe` software fallback;
+  установленный experimental VirGL не включается неожиданно;
 * для GNOME 49+ пробуется `gnome-shell --wayland --devkit`, для старых
   GNOME остаётся совместимый `gnome-shell --nested --wayland`;
 * desktop portals в режиме `auto` запускаются только при доступном `/dev/fuse`;
@@ -123,6 +127,9 @@ battery policy могут потребовать ручной настройки
 ```bash
 FEDORA_DISPLAY=:1 FEDORA_GPU_MODE=virpipe ./scripts/start.sh
 
+# install.sh --experimental-gpu устанавливает bridge, но проверять его нужно явно:
+FEDORA_GPU_MODE=virpipe FEDORA_PORTAL_MODE=off ./scripts/start.sh
+
 # если нужен desktop portal и /dev/fuse реально доступен:
 FEDORA_PORTAL_MODE=on ./scripts/start.sh
 ```
@@ -130,6 +137,28 @@ FEDORA_PORTAL_MODE=on ./scripts/start.sh
 Полезные переменные (`FEDORA_GPU_MODE`, `FEDORA_PORTAL_MODE` и остальные)
 описаны в `scripts/lib/common.sh` и в
 `fedora/rootfs/image.env`.
+
+### Профиль памяти для 12 GiB
+
+`FEDORA_MEMORY_PROFILE=auto` измеряет `MemTotal` и на планшете с 12 GiB
+выбирает `low`. Этот режим не удаляет GNOME и не трогает Android: он не
+запускает автоматически `gnome-settings-daemon`, terminal, PipeWire и
+индексатор Tracker, ограничивает glibc arena growth и выбирает виртуальный
+режим nested monitor 2560×1600. Разрешение Android-панели от этого не меняется.
+Нужную функцию можно включить точечно:
+
+```bash
+FEDORA_AUDIO_MODE=on FEDORA_SETTINGS_DAEMON=on \
+  FEDORA_LAUNCH_TERMINAL=on ./scripts/start.sh
+```
+
+Для полного desktop-профиля используйте `FEDORA_MEMORY_PROFILE=balanced`.
+Если Tracker уже был отключён предыдущим low-профилем, включите его явно:
+`FEDORA_SEARCH_MODE=on`.
+Для A/B-проверки native virtual mode используйте:
+`FEDORA_NESTED_MODE_SPECS=2960x1848 FEDORA_MEMORY_PROFILE=low`.
+Swap/zram проект не создаёт: этим безопасно управляет Android, а создание
+Linux swap-файла в PRoot не даёт настоящего kernel swap.
 
 Для one-tap запуска установите Termux:Widget из того же signing source и
 используйте созданный shortcut `Fedora`. Android APK из `android/` — отдельный
@@ -166,8 +195,9 @@ tablet backend.
 
 ## Обновление и удаление
 
-Обычное обновление останавливает сессию, создаёт backup, обновляет Termux и
-Fedora packages, затем повторно синхронизирует GNOME integration:
+Обычное обновление останавливает сессию, создаёт backup, подтягивает чистый
+`main` checkout, обновляет Termux и Fedora packages, затем синхронизирует
+установленное дерево и GNOME integration:
 
 ```bash
 ./scripts/update.sh
@@ -177,6 +207,9 @@ Fedora packages, затем повторно синхронизирует GNOME 
 
 ```bash
 ./scripts/update.sh --no-termux
+
+# оставить установленный код неизменным, обновляя только пакеты:
+./scripts/update.sh --no-project
 ```
 
 Перед удалением можно посмотреть точный scope:

@@ -40,6 +40,7 @@ fi
 
 fedora_kill_owned_pid "$FEDORA_PID_DIR/virgl.pid" virgl_test_server_android
 fedora_kill_owned_pid "$FEDORA_PID_DIR/termux-x11.pid" termux-x11
+rm -f -- "$FEDORA_PID_DIR/termux-x11.args"
 if [[ -x "$FEDORA_INSTALL_ROOT/audio/stop.sh" ]]; then
   "$FEDORA_INSTALL_ROOT/audio/stop.sh" || true
 fi

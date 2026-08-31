@@ -29,11 +29,20 @@ for fedora_config_variable in \
   FEDORA_DISPLAY \
   FEDORA_GPU_MODE \
   FEDORA_AUDIO_MODE \
+  FEDORA_MEMORY_PROFILE \
+  FEDORA_SETTINGS_DAEMON \
+  FEDORA_LAUNCH_TERMINAL \
+  FEDORA_KEYRING_MODE \
+  FEDORA_SEARCH_MODE \
   FEDORA_PORTAL_MODE \
   FEDORA_USER \
   FEDORA_TERMUX_X11_FULLSCREEN \
   FEDORA_NESTED_SCALE \
   FEDORA_NESTED_MODE \
+  FEDORA_NESTED_MODE_SPECS \
+  FEDORA_TERMUX_X11_LEGACY_DRAWING \
+  FEDORA_TERMUX_X11_FORCE_BGRA \
+  FEDORA_CHECKOUT_ROOT \
   FEDORA_INSTALL_ROOT \
   FEDORA_SHARED_STORAGE \
   FEDORA_GUEST_PROJECT_ROOT; do
@@ -63,14 +72,81 @@ unset fedora_config_override_names fedora_config_override_values \
 : "${FEDORA_DISPLAY:=:0}"
 : "${FEDORA_GPU_MODE:=auto}"
 : "${FEDORA_AUDIO_MODE:=auto}"
+: "${FEDORA_MEMORY_PROFILE:=auto}"
+: "${FEDORA_SETTINGS_DAEMON:=auto}"
+: "${FEDORA_LAUNCH_TERMINAL:=auto}"
+: "${FEDORA_KEYRING_MODE:=auto}"
+: "${FEDORA_SEARCH_MODE:=auto}"
 : "${FEDORA_PORTAL_MODE:=auto}"
 : "${FEDORA_USER:=fedora}"
 : "${FEDORA_TERMUX_X11_FULLSCREEN:=1}"
 : "${FEDORA_NESTED_SCALE:=1}"
 : "${FEDORA_NESTED_MODE:=auto}"
+: "${FEDORA_NESTED_MODE_SPECS:=}"
+: "${FEDORA_TERMUX_X11_LEGACY_DRAWING:=1}"
+: "${FEDORA_TERMUX_X11_FORCE_BGRA:=0}"
 : "${FEDORA_INSTALL_ROOT:=$FEDORA_USER_HOME/.local/share/fedora-shell}"
 : "${FEDORA_SHARED_STORAGE:=$FEDORA_USER_HOME/storage/shared}"
 : "${FEDORA_GUEST_PROJECT_ROOT:=/opt/fedora-shell}"
+
+fedora_resolve_memory_profile() {
+  local requested="${1:-auto}"
+  local total_kib=""
+  case "$requested" in
+    low|balanced|performance)
+      printf '%s\n' "$requested"
+      ;;
+    auto)
+      total_kib="$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
+      # Android reports usable host RAM rather than a desktop's free RAM. A
+      # 12 GiB tablet normally lands below this 13 GiB threshold, so the
+      # conservative session profile is selected without disabling Fedora.
+      if [[ "$total_kib" =~ ^[0-9]+$ ]] && (( total_kib <= 13 * 1024 * 1024 )); then
+        printf '%s\n' low
+      else
+        printf '%s\n' balanced
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+fedora_requested_memory_profile="$FEDORA_MEMORY_PROFILE"
+if ! FEDORA_MEMORY_PROFILE="$(fedora_resolve_memory_profile "$fedora_requested_memory_profile")"; then
+  printf '[fedora-shell][error] Unknown FEDORA_MEMORY_PROFILE=%s (use auto, low, balanced or performance).\n' \
+    "$fedora_requested_memory_profile" >&2
+  return 1 2>/dev/null || exit 64
+fi
+unset fedora_requested_memory_profile
+
+# The installed copy can be used after the checkout has moved. Prefer the
+# conventional bootstrap location when it is a real checkout, then fall back
+# to the directory containing the running script (useful for local testing).
+if [[ -z "${FEDORA_CHECKOUT_ROOT:-}" ]]; then
+  if [[ -d "$FEDORA_USER_HOME/fedora-galaxy/.git" ]]; then
+    FEDORA_CHECKOUT_ROOT="$FEDORA_USER_HOME/fedora-galaxy"
+  else
+    FEDORA_CHECKOUT_ROOT="$FEDORA_PROJECT_ROOT"
+  fi
+fi
+
+FEDORA_PROJECT_ITEMS=(
+  scripts
+  fedora
+  gpu
+  audio
+  input
+  integration
+  README.md
+  ARCHITECTURE.md
+  INSTALL.md
+  SECURITY.md
+  STATUS.md
+  TROUBLESHOOTING.md
+  VERSIONS.md
+)
 
 FEDORA_TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 FEDORA_TERMUX_HOME="${FEDORA_USER_HOME}"
@@ -137,6 +213,15 @@ fedora_getprop() {
   elif fedora_have_cmd getprop; then
     getprop "$key" 2>/dev/null || true
   fi
+}
+
+fedora_android_package_installed() {
+  local package_name="$1"
+  local pm_bin=/system/bin/pm
+  if [[ ! -x "$pm_bin" ]]; then
+    return 2
+  fi
+  "$pm_bin" path "$package_name" 2>/dev/null | grep -Fq 'package:'
 }
 
 fedora_init_state() {
@@ -224,6 +309,28 @@ fedora_pd_login_root() {
   fedora_pd_login_as root "$@"
 }
 
+fedora_sync_project_tree() {
+  local source_root="$1"
+  local target_root="$2"
+  local item
+
+  [[ -d "$source_root" ]] || {
+    fedora_die "Project checkout does not exist: $source_root"
+    return 1
+  }
+  [[ "$source_root" != "$target_root" ]] || return 0
+  mkdir -p "$target_root"
+  for item in "${FEDORA_PROJECT_ITEMS[@]}"; do
+    [[ -e "$source_root/$item" ]] || {
+      fedora_die "Project file is missing: $source_root/$item"
+      return 1
+    }
+    # Preserve executable bits. cp -R alone can silently inherit the target
+    # umask and was the reason a later git pull made launchers non-executable.
+    cp -a -- "$source_root/$item" "$target_root/"
+  done
+}
+
 fedora_free_kib() {
   df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4; exit }'
 }
@@ -249,6 +356,15 @@ fedora_kill_owned_pid() {
   pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
   if fedora_pid_matches "$pid" "$marker"; then
     kill "$pid" 2>/dev/null || true
+    local tries=0
+    while fedora_pid_matches "$pid" "$marker" && (( tries < 30 )); do
+      sleep 0.1
+      ((tries += 1))
+    done
+    if fedora_pid_matches "$pid" "$marker"; then
+      fedora_warn "Process $pid did not stop after 3 seconds; sending SIGKILL."
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
   fi
   rm -f -- "$pid_file"
 }
@@ -296,8 +412,17 @@ fedora_remove_owned_file() {
   local target="$1"
   local marker="$2"
   [[ -e "$target" ]] || return 0
-  [[ ! -L "$target" ]] || { fedora_die "Refusing to remove symlink: $target"; return 1; }
-  [[ -f "$target" ]] || fedora_die "Refusing to remove non-file: $target"
-  grep -Fq -- "$marker" "$target" || fedora_die "Refusing to remove unowned file: $target"
+  if [[ -L "$target" ]]; then
+    fedora_die "Refusing to remove symlink: $target"
+    return 1
+  fi
+  if [[ ! -f "$target" ]]; then
+    fedora_die "Refusing to remove non-file: $target"
+    return 1
+  fi
+  if ! grep -Fq -- "$marker" "$target"; then
+    fedora_die "Refusing to remove unowned file: $target"
+    return 1
+  fi
   rm -f -- "$target"
 }
