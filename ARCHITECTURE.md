@@ -60,7 +60,8 @@ manifest/image metadata, а `VERSIONS.md` не подменяет этот от�
 
 В Fedora ставятся GNOME Shell/Mutter, Mutter Devkit и базовые GNOME applications. GDM, systemd
 PID 1 и kernel-facing services не запускаются. `fedora-session` вручную
-создаёт D-Bus session bus, запускает PipeWire/WirePlumber и затем GNOME Shell
+создаёт D-Bus session bus, запускает минимальный PipeWire transport (и только
+при необходимости WirePlumber/PulseAudio) и затем GNOME Shell
 nested. Desktop portals запускаются только если Android/PRoot позволяет открыть
 `/dev/fuse`.
 
@@ -160,7 +161,9 @@ refresh mode. Fedora не создаёт второй security lock screen. `sta
 нужно настроить вручную на устройстве.
 
 Для 12 GiB RAM `FEDORA_MEMORY_PROFILE=auto` выбирает `low`: отключаются idle
-GNOME helpers (settings daemon, terminal, PipeWire и Tracker indexing),
+GNOME helpers (settings daemon, terminal, WirePlumber, pipewire-pulse, keyring и
+Tracker indexing), но сохраняется минимальный PipeWire display transport,
+который нужен Mutter Devkit для вывода экрана,
 анимации выключены, nested monitor понижается до 2560×1600, а
 `MALLOC_ARENA_MAX`/`MALLOC_TRIM_THRESHOLD_` ограничивают fragmentation и
 удержание свободной heap-памяти в долгоживущих glibc-процессах. Это advisory

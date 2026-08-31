@@ -39,7 +39,7 @@ pkg upgrade -y
 pkg install -y git
 git clone https://github.com/pluseight8/sgts11u-linux-fedora.git "$HOME/fedora-galaxy"
 cd "$HOME/fedora-galaxy"
-./scripts/install.sh
+bash ./scripts/install.sh
 ```
 
 `pkg upgrade -y` здесь обязателен: Termux использует rolling-release и не
@@ -52,6 +52,10 @@ Android storage, и отвечайте `y` именно на его вопрос
 читает package lists, это штатное автоматическое первоначальное определение.
 При настоящей ошибке зеркала выполните `termux-change-repo` и повторите
 bootstrap.
+
+`bash ./scripts/install.sh` в ручной инструкции намеренно переживает старый
+checkout, в котором Git потерял executable bits. После первого успешного
+запуска installer сам восстановит права всех проектных launcher-файлов.
 
 Installer:
 
@@ -113,6 +117,8 @@ battery policy могут потребовать ручной настройки
 * на Android 12+ автоматический запуск APK по умолчанию не выполняется из-за
   ограничений background activity; откройте Termux:X11 вручную. Для старого
   устройства/явного эксперимента можно задать `FEDORA_TERMUX_X11_AUTO_OPEN=on`;
+  если используется Android-контроллер из `android/`, его кнопка Start сначала
+  открывает Termux:X11 в foreground и затем отправляет команду в Termux;
 * для SM-X930 включён совместимый `-legacy-drawing`, чтобы избежать чёрной
   поверхности; отключение для A/B-проверки: `TERMUX_X11_LEGACY_DRAWING=0`;
 * `--shared-tmp` и `--shared-x11` передаются PRoot;
@@ -145,10 +151,11 @@ FEDORA_PORTAL_MODE=on ./scripts/start.sh
 
 `FEDORA_MEMORY_PROFILE=auto` измеряет `MemTotal` и на планшете с 12 GiB
 выбирает `low`. Этот режим не удаляет GNOME и не трогает Android: он не
-запускает автоматически `gnome-settings-daemon`, terminal, PipeWire и
-индексатор Tracker, ограничивает glibc arena growth и выбирает виртуальный
-режим nested monitor 2560×1600. Разрешение Android-панели от этого не меняется.
-Нужную функцию можно включить точечно:
+запускает автоматически `gnome-settings-daemon`, terminal, WirePlumber,
+pipewire-pulse, keyring и индексатор Tracker, но оставляет минимальный PipeWire
+display transport, обязательный для Mutter Devkit. Он также ограничивает glibc
+arena growth и выбирает виртуальный nested monitor 2560×1600. Разрешение
+Android-панели от этого не меняется. Нужную функцию можно включить точечно:
 
 ```bash
 FEDORA_AUDIO_MODE=on FEDORA_SETTINGS_DAEMON=on \

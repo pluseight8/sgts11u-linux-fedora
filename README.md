@@ -67,6 +67,10 @@ termux-setup-storage
 Не вставляйте `termux-setup-storage` и следующие команды одним блоком: при
 существующем `~/storage` эта команда интерактивна.
 
+Если старый checkout после `git pull` сообщил `Permission denied`, один раз
+запустите `bash ./scripts/install.sh --yes`: installer восстановит права
+только у известных проектных launcher-файлов.
+
 Для автоматического запуска через Termux:Boot используйте только после
 проверки ручного запуска:
 
@@ -77,6 +81,10 @@ termux-setup-storage
 Инсталлятор не устанавливает APK молча и не меняет default Home app. Для
 получения fullscreen нужно отдельно установить совместимые APK Termux:X11 и
 его пакет, затем включить fullscreen в настройках Termux:X11.
+На Android 12+/One UI надёжный ручной порядок такой: сначала открыть APK
+Termux:X11, затем выполнить `scripts/start.sh`. Опциональный Android-
+контроллер делает это одной кнопкой Start, когда ему выдано разрешение
+Termux RUN_COMMAND.
 
 Подробности: [INSTALL.md](INSTALL.md), ограничения: [ARCHITECTURE.md](ARCHITECTURE.md),
 фактические результаты: [STATUS.md](STATUS.md).
@@ -127,13 +135,14 @@ integration/android-bridge.sh        allowlisted Android API/intent client
 ## Память на планшете 12 GiB
 
 Профиль `FEDORA_MEMORY_PROFILE=auto` выбирает консервативный `low` при
-обнаружении примерно 12 GiB host RAM. Он сохраняет GNOME/Wayland, но не
-запускает без запроса необязательные `gnome-settings-daemon`, terminal,
-PipeWire и Tracker indexing; также ограничивает glibc arena growth и выключает
-анимации. Для nested Mutter автоматически выбирается виртуальный режим
-2560×1600, уменьшая compositor/Xwayland buffers; физическое Android-разрешение
-не изменяется. Это экономит RAM и заряд без попытки подменить Android memory
-manager.
+обнаружении примерно 12 GiB host RAM. Он сохраняет GNOME/Wayland, не запускает
+необязательные `gnome-settings-daemon`, terminal, WirePlumber, pipewire-pulse,
+keyring и Tracker indexing, но оставляет небольшой PipeWire display transport:
+Mutter Devkit использует его для передачи изображения даже при выключенном
+звуке. Также ограничивается glibc arena growth и выключаются анимации. Для
+nested Mutter автоматически выбирается виртуальный режим 2560×1600, уменьшая
+compositor/Xwayland buffers; физическое Android-разрешение не изменяется. Это
+экономит RAM и заряд без попытки подменить Android memory manager.
 
 Включить конкретную возможность можно отдельно:
 

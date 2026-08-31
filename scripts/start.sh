@@ -258,6 +258,7 @@ fedora_init_state
 ensure_x11
 fedora_log "Termux:X11 options: legacy_drawing=$LEGACY_DRAWING force_bgra=$FORCE_BGRA"
 wait_for_x11_transport
+fedora_log "Termux:X11 socket is ready; keep the companion Android Activity opened for a visible surface."
 ensure_virgl
 
 if fedora_container_running; then
@@ -318,6 +319,8 @@ session_env=(
   "FEDORA_NESTED_SCALE=$FEDORA_NESTED_SCALE"
   "FEDORA_NESTED_MODE=$FEDORA_NESTED_MODE"
   "FEDORA_NESTED_MODE_SPECS=$FEDORA_NESTED_MODE_SPECS"
+  "FEDORA_DEVKIT_GDK_BACKEND=$FEDORA_DEVKIT_GDK_BACKEND"
+  "FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE"
   "FEDORA_ALLOW_X11=${FEDORA_ALLOW_X11:-0}"
   "FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE"
 )

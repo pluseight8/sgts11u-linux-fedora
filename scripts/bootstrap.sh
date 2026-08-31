@@ -101,10 +101,19 @@ command -v git >/dev/null 2>&1 || {
   }
   # Termux is rolling-release and does not support partial upgrades. Upgrade
   # the existing environment before adding Git to avoid mixed shared libs.
-  pkg upgrade -y || {
-    printf '%s\n' 'Termux package upgrade failed. Run apt --fix-broken install -y, then retry.' >&2
-    exit 1
-  }
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get \
+      -o Dpkg::Options::=--force-confold \
+      -y dist-upgrade || {
+        printf '%s\n' 'Termux package upgrade failed. Run apt --fix-broken install -y, then retry.' >&2
+        exit 1
+      }
+  else
+    pkg upgrade -y || {
+      printf '%s\n' 'Termux package upgrade failed. Run apt --fix-broken install -y, then retry.' >&2
+      exit 1
+    }
+  fi
   pkg install -y git || {
     printf '%s\n' 'Git installation failed. Run termux-change-repo and retry.' >&2
     exit 1
@@ -155,7 +164,11 @@ else
 fi
 
 if (( RUN_INSTALL )); then
-  [[ -x "$TARGET_DIR/scripts/install.sh" ]] || chmod 700 "$TARGET_DIR/scripts/install.sh"
+  # Repair mode bits before exec and before install.sh copies the complete
+  # control tree into ~/.local/share/fedora-shell.
+  # shellcheck disable=SC1091
+  source "$TARGET_DIR/scripts/lib/common.sh"
+  fedora_repair_project_modes "$TARGET_DIR"
   exec "$TARGET_DIR/scripts/install.sh" "${INSTALL_ARGS[@]}"
 fi
 

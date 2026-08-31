@@ -13,6 +13,11 @@ while IFS= read -r -d '' file; do
   fi
 done < <(find "$root/scripts" "$root/gpu" "$root/audio" "$root/input" "$root/integration" "$root/fedora" -type f -name '*.sh' -print0)
 
+if ! bash -n "$root/fedora/gnome/fedora-run"; then
+  printf '%s\n' 'syntax error: fedora/gnome/fedora-run' >&2
+  status=1
+fi
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -x \
     "$root/scripts"/*.sh \
@@ -44,6 +49,7 @@ for executable in \
   scripts/update.sh \
   scripts/uninstall.sh \
   fedora/gnome/fedora-session \
+  fedora/gnome/fedora-run \
   fedora/rootfs/install-gnome.sh; do
   if [[ ! -x "$root/$executable" ]]; then
     printf 'required executable bit is missing: %s\n' "$executable" >&2
@@ -108,6 +114,18 @@ if ! grep -Fq 'fedora_resolve_memory_profile' "$root/scripts/lib/common.sh" \
   printf '%s\n' 'low-memory profile support is missing' >&2
   status=1
 fi
+if ! grep -Fq 'fedora_termux_full_upgrade' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'force-confold' "$root/scripts/bootstrap.sh"; then
+  printf '%s\n' 'non-interactive complete Termux upgrade helper is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'fedora_repair_project_modes' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'fedora_repair_project_modes "$source_project_root"' "$root/scripts/install.sh" \
+  || ! grep -Fq 'fedora_repair_project_modes "$checkout_root"' "$root/scripts/update.sh" \
+  || ! grep -Fq 'fedora_repair_project_modes "$TARGET_DIR"' "$root/scripts/bootstrap.sh"; then
+  printf '%s\n' 'project executable-mode repair is missing' >&2
+  status=1
+fi
 if ! grep -Fq 'enable-animations=false' "$root/fedora/config/dconf.ini"; then
   printf '%s\n' 'low-overhead GNOME defaults are missing' >&2
   status=1
@@ -120,6 +138,13 @@ fi
 if ! grep -Fq 'report_process_exit' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GNOME Shell Devkit crashed' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'GNOME crash evidence/reporting guard is missing' >&2
+  status=1
+fi
+if ! grep -Fq 'Starting minimal PipeWire display transport' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'wait_for_devkit_viewer' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'process_ids_by_name' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'FEDORA_DEVKIT_GDK_BACKEND' "$root/scripts/start.sh"; then
+  printf '%s\n' 'Mutter Devkit PipeWire/viewer health guards are missing' >&2
   status=1
 fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \

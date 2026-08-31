@@ -83,6 +83,7 @@ if (( UPDATE_PROJECT )); then
     fi
   fi
   if (( project_ready )); then
+    fedora_repair_project_modes "$checkout_root"
     fedora_log "Synchronizing project scripts and configuration into $FEDORA_INSTALL_ROOT."
     fedora_sync_project_tree "$checkout_root" "$FEDORA_INSTALL_ROOT"
   fi
@@ -93,7 +94,7 @@ fi
 if (( UPDATE_TERMUX )); then
   fedora_log "Updating Termux packages."
   pkg update -y
-  pkg upgrade -y
+  fedora_termux_full_upgrade
 else
   fedora_log "Skipping Termux package update (--no-termux)."
 fi

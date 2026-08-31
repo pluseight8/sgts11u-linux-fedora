@@ -175,7 +175,7 @@ fi
 
 fedora_log "Updating Termux packages as one complete rolling-release transaction."
 pkg update -y
-pkg upgrade -y
+fedora_termux_full_upgrade
 pkg install -y proot-distro termux-api
 if (( ! SKIP_X11_PACKAGE )); then
   pkg install -y x11-repo
@@ -225,6 +225,7 @@ if [[ ! -d "$source_project_root/.git" && -d "$FEDORA_CHECKOUT_ROOT/.git" ]]; th
   source_project_root="$FEDORA_CHECKOUT_ROOT"
 fi
 FEDORA_CHECKOUT_ROOT="$source_project_root"
+fedora_repair_project_modes "$source_project_root"
 fedora_sync_project_tree "$source_project_root" "$install_root"
 
 write_config() {
@@ -247,6 +248,8 @@ write_config() {
     printf 'FEDORA_NESTED_SCALE=%q\n' "$FEDORA_NESTED_SCALE"
     printf 'FEDORA_NESTED_MODE=%q\n' "$FEDORA_NESTED_MODE"
     printf 'FEDORA_NESTED_MODE_SPECS=%q\n' "$FEDORA_NESTED_MODE_SPECS"
+    printf 'FEDORA_DEVKIT_GDK_BACKEND=%q\n' "$FEDORA_DEVKIT_GDK_BACKEND"
+    printf 'FEDORA_DEVKIT_PIPEWIRE=%q\n' "$FEDORA_DEVKIT_PIPEWIRE"
     printf 'FEDORA_TERMUX_X11_LEGACY_DRAWING=%q\n' "$FEDORA_TERMUX_X11_LEGACY_DRAWING"
     printf 'FEDORA_TERMUX_X11_FORCE_BGRA=%q\n' "$FEDORA_TERMUX_X11_FORCE_BGRA"
     printf 'FEDORA_TERMUX_X11_AUTO_OPEN=%q\n' "$FEDORA_TERMUX_X11_AUTO_OPEN"

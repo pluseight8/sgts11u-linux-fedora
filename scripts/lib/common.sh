@@ -40,6 +40,8 @@ for fedora_config_variable in \
   FEDORA_NESTED_SCALE \
   FEDORA_NESTED_MODE \
   FEDORA_NESTED_MODE_SPECS \
+  FEDORA_DEVKIT_GDK_BACKEND \
+  FEDORA_DEVKIT_PIPEWIRE \
   FEDORA_TERMUX_X11_LEGACY_DRAWING \
   FEDORA_TERMUX_X11_FORCE_BGRA \
   FEDORA_TERMUX_X11_AUTO_OPEN \
@@ -84,6 +86,8 @@ unset fedora_config_override_names fedora_config_override_values \
 : "${FEDORA_NESTED_SCALE:=1}"
 : "${FEDORA_NESTED_MODE:=auto}"
 : "${FEDORA_NESTED_MODE_SPECS:=}"
+: "${FEDORA_DEVKIT_GDK_BACKEND:=x11}"
+: "${FEDORA_DEVKIT_PIPEWIRE:=auto}"
 : "${FEDORA_TERMUX_X11_LEGACY_DRAWING:=1}"
 : "${FEDORA_TERMUX_X11_FORCE_BGRA:=0}"
 : "${FEDORA_TERMUX_X11_AUTO_OPEN:=auto}"
@@ -193,6 +197,52 @@ fedora_have_cmd() {
 
 fedora_require_cmd() {
   fedora_have_cmd "$1" || fedora_die "Required command not found: $1"
+}
+
+fedora_termux_full_upgrade() {
+  # Termux is a rolling release. Keep the whole shared-library set in one
+  # transaction and preserve user-edited config files without opening a dpkg
+  # question in the middle of an installer/Widget run.
+  if fedora_have_cmd apt-get; then
+    DEBIAN_FRONTEND=noninteractive apt-get \
+      -o Dpkg::Options::=--force-confold \
+      -y dist-upgrade
+  else
+    pkg upgrade -y
+  fi
+}
+
+fedora_repair_project_modes() {
+  local project_root="$1"
+  local executable_path
+  local -a executable_paths=(
+    "$project_root"/scripts/*.sh
+    "$project_root"/scripts/lib/*.sh
+    "$project_root"/gpu/scripts/*.sh
+    "$project_root"/audio/*.sh
+    "$project_root"/input/*.sh
+    "$project_root"/integration/*.sh
+    "$project_root"/integration/boot/*
+    "$project_root"/integration/widget/*
+    "$project_root"/fedora/rootfs/*.sh
+    "$project_root"/fedora/gnome/fedora-session
+    "$project_root"/fedora/gnome/fedora-run
+    "$project_root"/fedora/gnome/install-integration.sh
+    "$project_root"/tests/static.sh
+  )
+
+  [[ -d "$project_root" ]] || {
+    fedora_die "Project root is missing: $project_root"
+    return 1
+  }
+  # Some Android/Git combinations have historically checked out executable
+  # files as 0644. These are project-owned launchers; restoring 0755 here is
+  # safe and makes an update self-healing before the tree is copied elsewhere.
+  for executable_path in "${executable_paths[@]}"; do
+    if [[ -f "$executable_path" ]]; then
+      chmod 0755 "$executable_path"
+    fi
+  done
 }
 
 fedora_is_termux() {

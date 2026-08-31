@@ -9,6 +9,8 @@ FEDORA_SESSION_RUNTIME="${FEDORA_SESSION_RUNTIME:-/tmp/fedora-runtime}"
 FEDORA_DISPLAY="${DISPLAY:-:0}"
 FEDORA_NESTED_SCALE="${FEDORA_NESTED_SCALE:-1}"
 FEDORA_NESTED_MODE="${FEDORA_NESTED_MODE:-auto}"
+FEDORA_DEVKIT_GDK_BACKEND="${FEDORA_DEVKIT_GDK_BACKEND:-x11}"
+FEDORA_DEVKIT_PIPEWIRE="${FEDORA_DEVKIT_PIPEWIRE:-auto}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
 FEDORA_PORTAL_MODE="${FEDORA_PORTAL_MODE:-auto}"
 FEDORA_MEMORY_PROFILE="${FEDORA_MEMORY_PROFILE:-balanced}"
@@ -227,6 +229,7 @@ session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE se
 configure_search_mode
 
 child_pids=()
+pipewire_pid=""
 cleanup() {
   local pid tries
   for pid in "${child_pids[@]:-}"; do
@@ -260,17 +263,70 @@ start_optional() {
     return 0
   fi
   "$executable" "$@" >> "$FEDORA_SESSION_LOG" 2>&1 &
-  child_pids+=("$!")
+  local child_pid="$!"
+  child_pids+=("$child_pid")
+  if [[ "$name" == pipewire ]]; then
+    pipewire_pid="$child_pid"
+  fi
 }
 
-# PipeWire and portals are user processes here. They may still fail if the
-# Android/Termux audio transport or required kernel feature is unavailable.
-# On a 12 GiB tablet, `auto` keeps the audio stack off unless it is explicitly
-# requested; the GNOME desktop itself does not need three idle audio daemons.
+wayland_transport_requested() {
+  case "$FEDORA_NESTED_MODE" in
+    x11|mutter) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+pipewire_socket_ready() {
+  [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0" ]] \
+    || [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" ]]
+}
+
+start_minimal_pipewire_for_devkit() {
+  wayland_transport_requested || return 0
+  case "$FEDORA_DEVKIT_PIPEWIRE" in
+    off|disabled|none|0|false|no)
+      session_log "Mutter Devkit PipeWire transport disabled (FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE); Wayland Devkit may not open"
+      return 0
+      ;;
+    auto|on|enabled|1|true|yes)
+      session_log "Starting minimal PipeWire display transport; full audio helpers remain disabled"
+      start_optional pipewire
+      ;;
+    *)
+      session_log "Unknown FEDORA_DEVKIT_PIPEWIRE=$FEDORA_DEVKIT_PIPEWIRE; skipping minimal PipeWire display transport"
+      ;;
+  esac
+}
+
+wait_for_pipewire() {
+  [[ -n "$pipewire_pid" ]] || return 0
+  local tries=0
+  while (( tries < 50 )); do
+    if pipewire_socket_ready; then
+      session_log "PipeWire display transport is ready"
+      return 0
+    fi
+    if ! kill -0 "$pipewire_pid" 2>/dev/null; then
+      session_log "PipeWire exited before creating $FEDORA_SESSION_RUNTIME/pipewire-0; Mutter Devkit may fail"
+      return 1
+    fi
+    sleep 0.1
+    ((tries += 1))
+  done
+  session_log "PipeWire did not publish a socket within 5 seconds; Mutter Devkit may fail"
+  return 1
+}
+
+# PipeWire and portals are user processes here. Mutter Devkit itself is a
+# PipeWire screen-cast client, so a minimal PipeWire server is mandatory even
+# when the user has disabled audio. The low-memory profile therefore omits
+# WirePlumber and pipewire-pulse, but keeps this one small display transport.
 start_audio_stack() {
   case "$FEDORA_AUDIO_MODE" in
     off|disabled|none)
       session_log "Audio stack disabled (FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE)"
+      start_minimal_pipewire_for_devkit
       ;;
     on|enabled)
       start_optional pipewire
@@ -279,7 +335,8 @@ start_audio_stack() {
       ;;
     auto)
       if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
-        session_log "Audio stack skipped by low memory profile; use FEDORA_AUDIO_MODE=on to enable it"
+        session_log "Full audio stack skipped by low memory profile; keeping minimal PipeWire for Mutter Devkit"
+        start_minimal_pipewire_for_devkit
       else
         start_optional pipewire
         start_optional wireplumber
@@ -288,8 +345,10 @@ start_audio_stack() {
       ;;
     *)
       session_log "Unknown FEDORA_AUDIO_MODE=$FEDORA_AUDIO_MODE; audio stack disabled"
+      start_minimal_pipewire_for_devkit
       ;;
   esac
+  wait_for_pipewire || true
 }
 start_audio_stack
 
@@ -298,6 +357,7 @@ start_desktop_portals() {
     off|disabled|none)
       export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
       export GIO_USE_VFS="${GIO_USE_VFS:-local}"
+      export ADW_DISABLE_PORTAL="${ADW_DISABLE_PORTAL:-1}"
       session_log "Desktop portals disabled (FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE)"
       return 0
       ;;
@@ -305,6 +365,7 @@ start_desktop_portals() {
       if ! portal_fuse_available; then
         export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
         export GIO_USE_VFS="${GIO_USE_VFS:-local}"
+        export ADW_DISABLE_PORTAL="${ADW_DISABLE_PORTAL:-1}"
         session_log "Skipping xdg-desktop-portal: /dev/fuse is unavailable under Android/PRoot"
         return 0
       fi
@@ -314,6 +375,7 @@ start_desktop_portals() {
     *)
       export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
       export GIO_USE_VFS="${GIO_USE_VFS:-local}"
+      export ADW_DISABLE_PORTAL="${ADW_DISABLE_PORTAL:-1}"
       session_log "Unknown FEDORA_PORTAL_MODE=$FEDORA_PORTAL_MODE; desktop portals disabled"
       return 0
       ;;
@@ -338,7 +400,7 @@ if command -v gnome-keyring-daemon >/dev/null 2>&1; then
       ;;
     auto)
       if [[ "$FEDORA_MEMORY_PROFILE" == low ]]; then
-        keyring_components=secrets
+        session_log "GNOME keyring skipped by low memory profile; set FEDORA_KEYRING_MODE=secrets or on to enable it"
       else
         keyring_components=secrets,ssh
       fi
@@ -408,6 +470,61 @@ wait_for_nested_socket() {
   return 1
 }
 
+process_ids_by_name() {
+  local process_name="$1"
+  local process_dir process_pid process_comm
+
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -x "$process_name" 2>/dev/null || true
+    return 0
+  fi
+  # procps/pgrep is normally pulled in by Fedora GNOME, but keep the viewer
+  # health check useful on a trimmed guest as well.
+  for process_dir in /proc/[0-9]*; do
+    [[ -r "$process_dir/comm" ]] || continue
+    process_pid="${process_dir##*/}"
+    process_comm="$(<"$process_dir/comm")" || continue
+    [[ "$process_comm" == "$process_name" ]] || continue
+    printf '%s\n' "$process_pid"
+  done
+}
+
+new_process_pid() {
+  local process_name="$1"
+  local previous_pids="${2:-}"
+  local process_pid
+
+  while read -r process_pid; do
+    [[ "$process_pid" =~ ^[0-9]+$ ]] || continue
+    if ! grep -Fxq "$process_pid" <<< "$previous_pids"; then
+      printf '%s\n' "$process_pid"
+      return 0
+    fi
+  done < <(process_ids_by_name "$process_name")
+  return 1
+}
+
+wait_for_devkit_viewer() {
+  local previous_pids="$1"
+  local shell_pid="$2"
+  local tries=0
+  local viewer_pid=""
+
+  while (( tries < 100 )); do
+    if ! kill -0 "$shell_pid" 2>/dev/null; then
+      return 1
+    fi
+    viewer_pid="$(new_process_pid mutter-devkit "$previous_pids" || true)"
+    if [[ "$viewer_pid" =~ ^[0-9]+$ ]] && kill -0 "$viewer_pid" 2>/dev/null; then
+      printf '%s\n' "$viewer_pid"
+      return 0
+    fi
+    sleep 0.1
+    ((tries += 1))
+  done
+  return 1
+}
+
 mutter_devkit_path() {
   if [[ -x /usr/libexec/mutter-devkit ]]; then
     printf '%s\n' /usr/libexec/mutter-devkit
@@ -466,8 +583,11 @@ run_wayland_devkit() {
     return 1
   fi
 
-  local before shell_pid nested_display shell_rc killed
+  local before before_viewer shell_pid nested_display shell_rc killed
+  local viewer_pid saved_gdk_backend saved_wayland_display
+  local devkit_backend="$FEDORA_DEVKIT_GDK_BACKEND"
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
+  before_viewer="$(process_ids_by_name mutter-devkit)"
   session_log "Starting GNOME Shell Wayland through Mutter Devkit on outer DISPLAY=$DISPLAY"
   local shell_args=(--wayland --devkit)
   if has_option gnome-shell --sm-disable; then
@@ -480,7 +600,30 @@ run_wayland_devkit() {
     export MUTTER_DEBUG_DUMMY_MODE_SPECS="$FEDORA_NESTED_MODE_SPECS"
   fi
 
-  unset WAYLAND_DISPLAY
+  saved_gdk_backend="${GDK_BACKEND:-}"
+  saved_wayland_display="${WAYLAND_DISPLAY:-}"
+  case "$devkit_backend" in
+    auto|x11)
+      # Termux:X11 is the outer transport. Force only the Devkit GTK viewer to
+      # use it; leaving the parent at wayland,x11 can make GTK choose the new
+      # nested socket after Mutter publishes it, which is a self-connection.
+      export GDK_BACKEND=x11
+      unset WAYLAND_DISPLAY
+      session_log "Mutter Devkit viewer backend: X11 ($DISPLAY)"
+      ;;
+    wayland)
+      if [[ -z "$saved_wayland_display" ]]; then
+        session_log "FEDORA_DEVKIT_GDK_BACKEND=wayland requested, but no outer WAYLAND_DISPLAY exists"
+        return 1
+      fi
+      export GDK_BACKEND=wayland
+      session_log "Mutter Devkit viewer backend: outer Wayland ($saved_wayland_display)"
+      ;;
+    *)
+      session_log "Unknown FEDORA_DEVKIT_GDK_BACKEND=$FEDORA_DEVKIT_GDK_BACKEND; use auto, x11 or wayland"
+      return 1
+      ;;
+  esac
   gnome-shell "${shell_args[@]}" >> "$FEDORA_SESSION_LOG" 2>&1 &
   shell_pid="$!"
   child_pids+=("$shell_pid")
@@ -500,6 +643,31 @@ run_wayland_devkit() {
     fi
     return 1
   fi
+  if ! viewer_pid="$(wait_for_devkit_viewer "$before_viewer" "$shell_pid")"; then
+    session_log "Mutter Devkit did not keep a GTK viewer alive; refusing to report a black/hidden session as ready"
+    if kill -0 "$shell_pid" 2>/dev/null; then
+      kill "$shell_pid" 2>/dev/null || true
+    fi
+    shell_rc=0
+    wait "$shell_pid" 2>/dev/null || shell_rc=$?
+    report_process_exit "GNOME Shell Devkit (viewer unavailable)" "$shell_rc"
+    return 125
+  fi
+  child_pids+=("$viewer_pid")
+
+  # The viewer was started by Mutter with the forced outer backend. Restore the
+  # nested-client defaults in this supervisor before launching terminals or
+  # settings helpers. The viewer keeps its own inherited environment.
+  if [[ -n "$saved_gdk_backend" ]]; then
+    export GDK_BACKEND="$saved_gdk_backend"
+  else
+    export GDK_BACKEND=wayland,x11
+  fi
+  if [[ -n "$saved_wayland_display" ]]; then
+    export WAYLAND_DISPLAY="$saved_wayland_display"
+  else
+    unset WAYLAND_DISPLAY
+  fi
   export WAYLAND_DISPLAY="$nested_display"
   export XDG_SESSION_TYPE=wayland
   {
@@ -509,6 +677,7 @@ run_wayland_devkit() {
     printf 'DISPLAY=%q\n' "$DISPLAY"
   } > "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
   chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
+  session_log "Mutter Devkit viewer is alive (PID $viewer_pid)"
   session_log "Desktop session: Wayland ($WAYLAND_DISPLAY) via Mutter Devkit; transport: X11 ($DISPLAY)"
 
   start_settings_daemon

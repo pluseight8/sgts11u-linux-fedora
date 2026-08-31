@@ -38,6 +38,20 @@ pkg upgrade -y
 Do not install only `curl`, `libcurl` or `libngtcp2` in a stale Termux
 environment; Termux documents that partial upgrades are unsupported.
 
+## `Permission denied` after `git pull`
+
+If Git shows a mode change such as `755 => 644`, run the installer through
+`bash` once so it can repair the project-owned launcher bits and resync the
+installed control tree:
+
+```bash
+cd "$HOME/fedora-galaxy"
+bash ./scripts/install.sh --yes --memory-profile low
+```
+
+The installer repairs only known Fedora Shell launchers. Do not use a
+recursive `chmod` over `$HOME` or Termux's whole prefix.
+
 ## Fedora сообщает `No match for argument: xorg-x11-server-utils`
 
 Это старое/недоступное имя X11-пакета для Fedora 44 на ARM64, а не причина
@@ -84,6 +98,10 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
    FEDORA_GPU_MODE=software FEDORA_PORTAL_MODE=off \
      ./scripts/start.sh --legacy-drawing
    ```
+
+   В профиле `low` PipeWire display transport всё равно запускается: это не
+   звук, а обязательный канал Mutter Devkit для вывода вложенного экрана.
+   Полный звук при этом остаётся выключенным.
 
    Этот режим рекомендован upstream Termux:X11 для устройств, где обычный
    drawing даёт чёрную поверхность.
@@ -180,14 +198,20 @@ wrapper остаётся experimental.
 ./scripts/diagnostics.sh --full --redact
 ```
 
-На 12 GiB `auto` выбирает `low`: terminal, PipeWire, Tracker и settings daemon
-не стартуют автоматически, а nested monitor обычно работает в 2560×1600.
-Это ожидаемая оптимизация. Включайте только то, что нужно для текущей задачи:
+На 12 GiB `auto` выбирает `low`: terminal, WirePlumber, pipewire-pulse, keyring,
+Tracker и settings daemon не стартуют автоматически, а минимальный PipeWire
+display transport остаётся для Mutter Devkit. Nested monitor обычно работает в
+2560×1600. Это ожидаемая оптимизация. Включайте только то, что нужно для
+текущей задачи:
 
 ```bash
 FEDORA_AUDIO_MODE=on ./scripts/start.sh
 FEDORA_SETTINGS_DAEMON=on FEDORA_LAUNCH_TERMINAL=on ./scripts/start.sh
 ```
+
+Если нужен только GNOME Devkit без звука, ничего дополнительно включать не
+нужно. `FEDORA_DEVKIT_PIPEWIRE=off` предназначен только для отладки и почти
+гарантированно отключит видимый Devkit-сеанс.
 
 Если нужен обычный полный desktop-профиль:
 

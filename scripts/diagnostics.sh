@@ -109,6 +109,77 @@ process_memory_snapshot() {
     "$count" "$total_rss" "$total_pss"
 }
 
+termux_x11_inventory() {
+  printf 'termux_x11_command=%s\n' "$(command -v termux-x11 2>/dev/null || echo missing)"
+  if command -v dpkg-query >/dev/null 2>&1; then
+    printf 'termux_x11_package_version='
+    dpkg-query -W -f='${Version}\n' termux-x11-nightly 2>/dev/null || printf '%s\n' unknown
+  fi
+  if [[ -x /system/bin/pm ]]; then
+    printf 'android_package_uids=\n'
+    /system/bin/pm list packages -U 2>/dev/null \
+      | grep -E 'com\.termux($|\.x11)' || true
+    printf 'android_x11_package_summary=\n'
+    /system/bin/dumpsys package com.termux.x11 2>/dev/null \
+      | awk '/Package \[com\.termux\.x11\]|versionName=|versionCode=|userId=|codePath=/{print}' \
+      | head -n 20 || true
+  else
+    printf 'android_package_uids=unknown\n'
+    printf 'android_x11_package_summary=unknown\n'
+  fi
+}
+
+guest_runtime_evidence() {
+  local runtime="$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime"
+  local path
+  printf 'runtime_path=%s\n' "$runtime"
+  if [[ ! -d "$runtime" ]]; then
+    printf '%s\n' 'runtime=missing'
+    return 0
+  fi
+  printf 'runtime_entries=\n'
+  while IFS= read -r path; do
+    printf '%s type=%s\n' "$(basename -- "$path")" \
+      "$(stat -c %F "$path" 2>/dev/null || printf unknown)"
+  done < <(find "$runtime" -maxdepth 1 \( -type s -o -type f \) -print 2>/dev/null | sort)
+  printf 'wayland_socket=%s\n' \
+    "$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit 2>/dev/null | sed 's#^.*/##' || true)"
+  if [[ -S "$runtime/pipewire-0" ]]; then
+    printf '%s\n' 'pipewire_socket=present'
+  else
+    printf '%s\n' 'pipewire_socket=absent'
+  fi
+}
+
+guest_session_log_evidence() {
+  local session_log="$FEDORA_TERMUX_PREFIX/tmp/fedora-session.log"
+  printf 'session_log_path=%s\n' "$session_log"
+  if [[ -r "$session_log" ]]; then
+    printf '%s\n' 'session_log_tail_begin='
+    tail -n 220 "$session_log"
+    printf '%s\n' 'session_log_tail_end='
+  else
+    printf '%s\n' 'session_log=missing'
+  fi
+}
+
+guest_process_evidence() {
+  if ! fedora_container_running; then
+    printf '%s\n' 'guest_container=not-running'
+    return 0
+  fi
+  printf '%s\n' 'guest_container=running'
+  # shellcheck disable=SC2016
+  fedora_pd_login /usr/bin/env \
+    "XDG_RUNTIME_DIR=/tmp/fedora-runtime" \
+    /bin/bash -c '
+      printf "%s\n" "guest_processes="
+      ps -eo pid=,stat=,comm=,args= 2>/dev/null \
+        | grep -E "gnome-shell|mutter-devkit|pipewire|wireplumber|xdg-desktop-portal" \
+        || true
+    '
+}
+
 selinux_state="unknown"
 if fedora_have_cmd getenforce; then
   selinux_state="$(getenforce 2>/dev/null || true)"
@@ -162,6 +233,8 @@ fi
   printf 'virgl_server=%s\n' "$virgl_installed"
   printf 'gpu_mode=%s\n' "$FEDORA_GPU_MODE"
   printf 'portal_mode=%s\n' "$FEDORA_PORTAL_MODE"
+  printf 'devkit_gdk_backend=%s\n' "$FEDORA_DEVKIT_GDK_BACKEND"
+  printf 'devkit_pipewire=%s\n' "$FEDORA_DEVKIT_PIPEWIRE"
   printf 'redacted=%s\n' "$([[ $REDACT -eq 1 ]] && echo yes || echo no)"
   printf 'state_dir=%s\n' "$FEDORA_STATE_DIR"
   printf 'install_root=%s\n' "$FEDORA_INSTALL_ROOT"
@@ -194,6 +267,10 @@ if [[ "$MODE" == full ]]; then
     capture 'Android input' /system/bin/dumpsys input || true
     capture 'Android audio' /system/bin/dumpsys audio || true
   fi
+  capture 'Termux:X11 package inventory' termux_x11_inventory
+  capture 'Fedora runtime sockets' guest_runtime_evidence
+  capture 'Fedora session log tail' guest_session_log_evidence
+  capture 'Fedora guest processes' guest_process_evidence
 else
   if [[ -x /system/bin/settings ]]; then
     capture 'Android display settings' /system/bin/settings get system peak_refresh_rate || true

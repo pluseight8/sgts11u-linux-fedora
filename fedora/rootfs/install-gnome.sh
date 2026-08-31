@@ -105,8 +105,10 @@ install -d -m 0755 /etc/systemd/system
 cat > /etc/fedora-shell/README <<'EOF'
 This Fedora userspace runs under Android + PRoot-Distro.
 systemd is not PID 1 here. Do not use systemctl as a health check.
-fedora-session starts a private D-Bus session bus, PipeWire, WirePlumber and
-GNOME; the private bus is also exposed as a compatibility system-bus address
+fedora-session starts a private D-Bus session bus, a minimal PipeWire display
+transport and GNOME; WirePlumber/pipewire-pulse are optional helpers enabled by
+the audio profile. The private bus is also exposed as a compatibility
+system-bus address
 because PRoot cannot provide Android/systemd's system bus. This does not
 provide logind, UPower, RTKit or other privileged system services. Desktop
 portals are enabled only when their Android/PRoot FUSE prerequisite is usable.

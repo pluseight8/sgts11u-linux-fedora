@@ -24,6 +24,12 @@ Termux, Termux:X11, Termux:API or any Android app.
 5. Optionally choose Fedora Shell as Home in Android Settings. One UI Home
    remains installed and can be selected again at any time.
 
+When the user taps `Start / reconnect Fedora`, the launcher first opens the
+foreground Termux:X11 activity. This is important on Android 12+ / One UI,
+where a background `am start` from Termux can be rejected even though the X11
+socket process is healthy. Boot/Widget launches remain best-effort and may still
+require opening Termux:X11 manually.
+
 The Home activity hides system bars while it is visible, but it cannot remove
 SystemUI or override Android lock-screen/background policy. The boot checkbox is
 off by default and is only best-effort on Samsung firmware.

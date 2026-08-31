@@ -9,6 +9,13 @@ redacted diagnostics-файла нет, поэтому факты из конс�
 Допустимые значения: `WORKING`, `PARTIAL`, `ANDROID-BRIDGED`, `BROKEN`,
 `UNSUPPORTED`, `UNTESTED`.
 
+Последний аудит журнала показал не ошибку установки Fedora, а потерю
+`mutter-devkit` после публикации nested Wayland-сокета. В следующем запуске
+supervisor теперь проверяет живой viewer, сохраняет состояние PipeWire и
+runtime-сокетов в full diagnostics и не объявляет чёрную/невидимую сессию
+успешной. Визуальный результат на планшете всё ещё требует повторного
+acceptance-теста после обновления control tree.
+
 ## Основные компоненты
 
 | Component | Method | Status | Evidence / next test |

@@ -70,7 +70,12 @@ public class MainActivity extends Activity {
         status.setPadding(0, 0, 0, dp(12));
         content.addView(status, new LinearLayout.LayoutParams(-1, -2));
 
-        addAction(content, "Start / reconnect Fedora", v -> runScript("start.sh", true));
+        addAction(content, "Start / reconnect Fedora", v -> startFedora());
+        addAction(content, "Open Termux:X11", v -> {
+            status.setText(openTermuxX11Activity()
+                    ? "Termux:X11 opened. Return here or wait for Fedora to start."
+                    : "Termux:X11 is not installed or its activity is unavailable.");
+        });
         addAction(content, "Stop Fedora", v -> runScript("stop.sh", true));
         addAction(content, "Diagnostics", v -> runScript("diagnostics.sh", true));
         addAction(content, "Android Settings", v -> openSettings(Settings.ACTION_SETTINGS));
@@ -110,6 +115,35 @@ public class MainActivity extends Activity {
         status.setText(sent
                 ? "Sent " + script + " to Termux. Android background policy may delay it."
                 : "Could not contact Termux. Grant RUN_COMMAND and check Termux setup.");
+    }
+
+    /**
+     * Android 12+ may reject a background `am start` issued by Termux. This
+     * activity is already foreground when the user presses Start, so launch the
+     * companion X11 activity here and let start.sh only handle the transport.
+     */
+    private void startFedora() {
+        boolean x11Opened = openTermuxX11Activity();
+        boolean sent = BridgeClient.runProjectScript(this, "start.sh", true);
+        if (!sent) {
+            status.setText("Could not contact Termux. Grant RUN_COMMAND and check Termux setup.");
+        } else if (x11Opened) {
+            status.setText("Termux:X11 opened; Fedora start sent to Termux.");
+        } else {
+            status.setText("Fedora start sent. Open the Termux:X11 APK manually if no window appears.");
+        }
+    }
+
+    private boolean openTermuxX11Activity() {
+        Intent intent = new Intent();
+        intent.setClassName("com.termux.x11", "com.termux.x11.MainActivity");
+        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        try {
+            startActivity(intent);
+            return true;
+        } catch (RuntimeException error) {
+            return false;
+        }
     }
 
     private void openSettings(String action) {
