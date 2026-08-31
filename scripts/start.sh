@@ -8,6 +8,15 @@ source "$FEDORA_ENTRY_DIR/lib/common.sh"
 
 LEGACY_DRAWING=0
 FORCE_BGRA=0
+# Termux:X11 documents -legacy-drawing as the compatibility path for devices
+# that show only a black surface. Keep the CLI flag, but also honor the
+# documented environment variable so a launcher can persist the workaround.
+if fedora_is_true "${TERMUX_X11_LEGACY_DRAWING:-${FEDORA_TERMUX_X11_LEGACY_DRAWING:-0}}"; then
+  LEGACY_DRAWING=1
+fi
+if fedora_is_true "${TERMUX_X11_FORCE_BGRA:-${FEDORA_TERMUX_X11_FORCE_BGRA:-0}}"; then
+  FORCE_BGRA=1
+fi
 LEAVE_TRANSPORT=0
 
 usage() {
@@ -15,7 +24,7 @@ usage() {
 Usage: ./scripts/start.sh [OPTIONS]
 
 Options:
-  --legacy-drawing  pass Termux:X11 -legacy-drawing (diagnostic only)
+  --legacy-drawing  pass Termux:X11 -legacy-drawing (black-screen compatibility)
   --force-bgra      pass Termux:X11 -force-bgra (diagnostic only)
   --reconnect       reconnect to a running Fedora session and leave transport up
   -h, --help        show this help
@@ -55,23 +64,34 @@ open_x11_activity() {
     am_bin="$(command -v am)"
   fi
   if [[ -n "$am_bin" ]]; then
-    "$am_bin" start --user 0 -n com.termux.x11/com.termux.x11.MainActivity \
-      >> "$FEDORA_LOG_FILE" 2>&1 || fedora_warn "Could not open Termux:X11 activity automatically."
+    local am_output=""
+    if ! am_output="$("$am_bin" start --user 0 -n com.termux.x11/com.termux.x11.MainActivity 2>&1)"; then
+      am_output="$(printf '%s' "$am_output" | tr '\n' ' ')"
+      fedora_warn "Could not open Termux:X11 activity automatically: $am_output"
+      fedora_warn "Open the Termux:X11 APK manually; its APK and Termux package must come from the same release source."
+    fi
+    [[ -z "$am_output" ]] || printf '[x11-activity] %s\n' "$am_output" >> "$FEDORA_LOG_FILE"
   else
     fedora_warn "Android am command is unavailable; open Termux:X11 manually."
   fi
 }
 
 ensure_x11() {
+  local x11_socket="$FEDORA_TERMUX_PREFIX/tmp/.X11-unix/X${FEDORA_DISPLAY#:}"
   if [[ -f "$x11_pid_file" ]]; then
     local old_pid
     old_pid="$(sed -n '1p' "$x11_pid_file" 2>/dev/null || true)"
-    if fedora_pid_matches "$old_pid" termux-x11; then
+    if fedora_pid_matches "$old_pid" termux-x11 && [[ -S "$x11_socket" ]]; then
       fedora_log "Reusing Termux:X11 process $old_pid on $FEDORA_DISPLAY."
       open_x11_activity
       return 0
     fi
-    rm -f -- "$x11_pid_file"
+    if fedora_pid_matches "$old_pid" termux-x11; then
+      fedora_warn "Recorded Termux:X11 process $old_pid has no socket $x11_socket; restarting the stale server."
+      fedora_kill_owned_pid "$x11_pid_file" termux-x11
+    else
+      rm -f -- "$x11_pid_file"
+    fi
   fi
 
   local -a x11_args=("$FEDORA_DISPLAY")

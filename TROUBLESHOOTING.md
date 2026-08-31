@@ -71,16 +71,28 @@ Termux:X11 один раз либо используйте `./scripts/start.sh`,
 
 1. Убедитесь, что APK Termux:X11 и package `termux-x11-nightly` одной версии и
    одного signing source.
-2. Откройте Termux:X11 вручную один раз.
-3. Попробуйте другой display:
+2. Откройте Termux:X11 вручную один раз. Автоматический `am start` может быть
+   запрещён Android 16/One UI политикой запуска background activity.
+3. Если поверхность чёрная или виден только курсор, перезапустите через
+   compatibility drawing:
+
+   ```bash
+   ./scripts/stop.sh --yes
+   FEDORA_GPU_MODE=software FEDORA_PORTAL_MODE=off \
+     ./scripts/start.sh --legacy-drawing
+   ```
+
+   Этот режим рекомендован upstream Termux:X11 для устройств, где обычный
+   drawing даёт чёрную поверхность.
+4. Попробуйте другой display:
 
    ```bash
    FEDORA_DISPLAY=:1 ./scripts/start.sh
    ```
 
-4. Для проблем самого X transport используйте `TERMUX_X11_LEGACY_DRAWING=1`
-   только как диагностику.
-5. Проверьте `logs/termux-x11.log` и `logs/fedora-session.log`.
+5. Переменную `TERMUX_X11_LEGACY_DRAWING=1` теперь тоже можно использовать
+   вместо CLI-флага.
+6. Проверьте `logs/termux-x11.log` и `logs/fedora-session.log`.
 
 Не включайте pure X11 как постоянное решение до проверки Wayland.
 

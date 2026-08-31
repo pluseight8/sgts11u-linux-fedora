@@ -66,6 +66,11 @@ if ! grep -Fq 'LIBGL_ALWAYS_SOFTWARE=1' "$root/scripts/start.sh"; then
   printf '%s\n' 'safe software GPU fallback is missing' >&2
   status=1
 fi
+if ! grep -Fq 'TERMUX_X11_LEGACY_DRAWING' "$root/scripts/start.sh" \
+  || ! grep -Fq 'has no socket' "$root/scripts/start.sh"; then
+  printf '%s\n' 'Termux:X11 black-screen/stale-socket recovery is missing' >&2
+  status=1
+fi
 if ! grep -Fq 'fedora_config_override_names' "$root/scripts/lib/common.sh" \
   || ! grep -Fq 'printf -v' "$root/scripts/lib/common.sh"; then
   printf '%s\n' 'environment overrides must take precedence over config.env' >&2
