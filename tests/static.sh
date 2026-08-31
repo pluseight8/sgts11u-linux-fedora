@@ -53,6 +53,11 @@ if ! grep -Fq 'LIBGL_ALWAYS_SOFTWARE=1' "$root/scripts/start.sh"; then
   printf '%s\n' 'safe software GPU fallback is missing' >&2
   status=1
 fi
+if ! grep -Fq 'fedora_config_override_names' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'printf -v' "$root/scripts/lib/common.sh"; then
+  printf '%s\n' 'environment overrides must take precedence over config.env' >&2
+  status=1
+fi
 if ! grep -Fq 'report_process_exit' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GNOME Shell Devkit crashed' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'GNOME crash evidence/reporting guard is missing' >&2

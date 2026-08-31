@@ -16,12 +16,45 @@ fi
 FEDORA_STATE_DIR="${FEDORA_STATE_DIR:-$FEDORA_USER_HOME/.fedora-shell}"
 FEDORA_CONFIG_FILE="${FEDORA_CONFIG_FILE:-$FEDORA_STATE_DIR/config.env}"
 
+# Preserve explicit environment overrides while loading the persistent config.
+# The config supplies defaults, but a command such as
+# `FEDORA_GPU_MODE=software ./scripts/start.sh` must be able to override it.
+fedora_config_override_names=()
+fedora_config_override_values=()
+for fedora_config_variable in \
+  FEDORA_CONTAINER \
+  FEDORA_RELEASE \
+  FEDORA_IMAGE \
+  FEDORA_ARCH \
+  FEDORA_DISPLAY \
+  FEDORA_GPU_MODE \
+  FEDORA_AUDIO_MODE \
+  FEDORA_PORTAL_MODE \
+  FEDORA_USER \
+  FEDORA_TERMUX_X11_FULLSCREEN \
+  FEDORA_NESTED_SCALE \
+  FEDORA_NESTED_MODE \
+  FEDORA_INSTALL_ROOT \
+  FEDORA_SHARED_STORAGE \
+  FEDORA_GUEST_PROJECT_ROOT; do
+  if [[ -v "$fedora_config_variable" ]]; then
+    fedora_config_override_names+=("$fedora_config_variable")
+    fedora_config_override_values+=("${!fedora_config_variable}")
+  fi
+done
+
 # The config is created by install.sh with mode 0600. Do not source a config
 # from the repository: the installed state directory is the trust boundary.
 if [[ -r "$FEDORA_CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$FEDORA_CONFIG_FILE"
 fi
+for fedora_config_index in "${!fedora_config_override_names[@]}"; do
+  printf -v "${fedora_config_override_names[$fedora_config_index]}" '%s' \
+    "${fedora_config_override_values[$fedora_config_index]}"
+done
+unset fedora_config_override_names fedora_config_override_values \
+  fedora_config_variable fedora_config_index
 
 : "${FEDORA_CONTAINER:=fedora-s11u}"
 : "${FEDORA_RELEASE:=44}"
