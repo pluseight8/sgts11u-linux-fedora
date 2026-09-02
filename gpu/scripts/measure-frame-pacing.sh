@@ -30,7 +30,11 @@ fedora_require_termux
 fedora_require_non_root
 fedora_require_container
 fedora_init_state
-report="$FEDORA_LOG_DIR/frame-pacing-$(date -u +%Y%m%dT%H%M%SZ).txt"
+report="$FEDORA_LOG_DIR/frame-pacing-$(date -u +%Y%m%dT%H%M%SZ)-$$.txt"
+fedora_report_path_is_safe "$report" || {
+  fedora_die "Refusing an unsafe frame-pacing report path: $report"
+  exit 1
+}
 umask 077
 
 {

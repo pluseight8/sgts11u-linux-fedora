@@ -42,7 +42,11 @@ done
 fedora_require_termux
 fedora_require_non_root
 fedora_init_state
-report="$FEDORA_LOG_DIR/diagnostics-$(date -u +%Y%m%dT%H%M%SZ).txt"
+report="$FEDORA_LOG_DIR/diagnostics-$(date -u +%Y%m%dT%H%M%SZ)-$$.txt"
+fedora_report_path_is_safe "$report" || {
+  fedora_die "Refusing an unsafe diagnostics report path: $report"
+  exit 1
+}
 umask 077
 
 capture() {
@@ -109,6 +113,114 @@ process_memory_snapshot() {
     "$count" "$total_rss" "$total_pss"
 }
 
+readonly_sysfs_bytes_to_kib() {
+  local path="$1"
+  local raw=""
+  [[ -r "$path" ]] || return 0
+  raw="$(sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$path" 2>/dev/null \
+    | sed -n '1p' || true)"
+  [[ "$raw" =~ ^[0-9]+$ ]] || return 0
+  printf '%s\n' "$(((raw + 1023) / 1024))"
+}
+
+android_ramplus_snapshot() {
+  # Samsung RAM Plus is an OEM Android setting backed by Android's own memory
+  # policy. Unprivileged Termux cannot reliably read its UI value, and this
+  # probe must never write settings, resize swap or change kernel state. Report
+  # only indirect swap/zRAM evidence and keep the setting explicitly unknown.
+  local device size used swap_type
+  local swap_entries=0 zram_swap_entries=0 swap_total=0 swap_used=0
+  local zram_device_count=0 zram_path configured original compressed physical
+  local configured_total=0 original_total=0 compressed_total=0 physical_total=0
+  local configured_seen=0 original_seen=0 compressed_seen=0 physical_seen=0
+
+  printf '%s\n' 'ramplus_setting=not-readable'
+  printf '%s\n' 'ramplus_control=Android/Samsung only; no Fedora-side mutation'
+
+  if [[ -r /proc/swaps ]]; then
+    while read -r device _ size used swap_type; do
+      [[ "$size" =~ ^[0-9]+$ && "$used" =~ ^[0-9]+$ ]] || continue
+      swap_entries=$((swap_entries + 1))
+      swap_total=$((swap_total + size))
+      swap_used=$((swap_used + used))
+      if [[ "$device" == *zram* ]]; then
+        zram_swap_entries=$((zram_swap_entries + 1))
+      fi
+    done < <(tail -n +2 /proc/swaps 2>/dev/null || true)
+    printf 'swap_probe=readable swap_entries=%d zram_swap_entries=%d swap_total_kib=%d swap_used_kib=%d\n' \
+      "$swap_entries" "$zram_swap_entries" "$swap_total" "$swap_used"
+    printf 'non_zram_swap_entries=%d\n' "$((swap_entries - zram_swap_entries))"
+  else
+    printf '%s\n' 'swap_probe=unavailable'
+    printf '%s\n' 'non_zram_swap_entries=unknown'
+  fi
+
+  for zram_path in /sys/block/zram[0-9]*; do
+    [[ -d "$zram_path" ]] || continue
+    zram_device_count=$((zram_device_count + 1))
+    configured="$(readonly_sysfs_bytes_to_kib "$zram_path/disksize")"
+    original="$(readonly_sysfs_bytes_to_kib "$zram_path/orig_data_size")"
+    compressed="$(readonly_sysfs_bytes_to_kib "$zram_path/compr_data_size")"
+    physical="$(readonly_sysfs_bytes_to_kib "$zram_path/mem_used_total")"
+    [[ "$configured" =~ ^[0-9]+$ ]] && {
+      configured_total=$((configured_total + configured)); configured_seen=1;
+    }
+    [[ "$original" =~ ^[0-9]+$ ]] && {
+      original_total=$((original_total + original)); original_seen=1;
+    }
+    [[ "$compressed" =~ ^[0-9]+$ ]] && {
+      compressed_total=$((compressed_total + compressed)); compressed_seen=1;
+    }
+    [[ "$physical" =~ ^[0-9]+$ ]] && {
+      physical_total=$((physical_total + physical)); physical_seen=1;
+    }
+    printf 'zram_device=%s disksize_kib=%s orig_data_kib=%s compr_data_kib=%s physical_used_kib=%s\n' \
+      "${zram_path##*/}" "${configured:-unknown}" "${original:-unknown}" \
+      "${compressed:-unknown}" "${physical:-unknown}"
+  done
+
+  if (( zram_device_count > 0 )); then
+    printf 'zram_probe=visible zram_device_count=%d\n' "$zram_device_count"
+  else
+    printf '%s\n' 'zram_probe=not-visible'
+  fi
+  (( configured_seen )) && printf 'zram_configured_total_kib=%d\n' "$configured_total" \
+    || printf '%s\n' 'zram_configured_total_kib=unknown'
+  (( original_seen )) && printf 'zram_original_data_total_kib=%d\n' "$original_total" \
+    || printf '%s\n' 'zram_original_data_total_kib=unknown'
+  (( compressed_seen )) && printf 'zram_compressed_data_total_kib=%d\n' "$compressed_total" \
+    || printf '%s\n' 'zram_compressed_data_total_kib=unknown'
+  (( physical_seen )) && printf 'zram_physical_used_total_kib=%d\n' "$physical_total" \
+    || printf '%s\n' 'zram_physical_used_total_kib=unknown'
+  printf '%s\n' 'ramplus_note=zRAM/swap observations are indirect and do not prove the Samsung RAM Plus UI state or amount'
+}
+
+devkit_viewer_environment() {
+  command -v ps >/dev/null 2>&1 || return 1
+  local pid comm command_line environment
+  while read -r pid comm command_line; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if [[ "$comm" != mutter-devkit ]]; then
+      # The Fedora-only activation shim is a script. Depending on the kernel
+      # and procps build, ps may expose it as `bash`/`env` instead of the
+      # target basename. Match only the two project-owned Mutter paths and do
+      # not print the command line, which can contain private arguments.
+      case "$command_line" in
+        */usr/libexec/mutter-devkit*|*mutter-devkit.real*) ;;
+        *) continue ;;
+      esac
+    fi
+    if [[ -r "/proc/$pid/environ" ]]; then
+      environment="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+        | grep -E '^(DISPLAY|GDK_BACKEND|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PIPEWIRE_CORE)=' \
+        | tr '\n' ' ' || true)"
+    else
+      environment=unavailable
+    fi
+    printf 'pid=%s comm=%s env=%s\n' "$pid" "$comm" "${environment:-unavailable}"
+  done < <(ps -eo pid=,comm=,args= 2>/dev/null)
+}
+
 termux_x11_inventory() {
   printf 'termux_x11_command=%s\n' "$(command -v termux-x11 2>/dev/null || echo missing)"
   if command -v dpkg-query >/dev/null 2>&1; then
@@ -161,6 +273,36 @@ guest_runtime_evidence() {
   fi
 }
 
+android_app_bridge_evidence() {
+  local runtime="$FEDORA_TERMUX_PREFIX/tmp/fedora-runtime/android-bridge"
+  local pid_file="$FEDORA_PID_DIR/android-bridge-broker.pid"
+  local broker_pid=""
+  printf 'android_apps_mode=%s\n' "$FEDORA_ANDROID_APPS_MODE"
+  printf 'broker_runtime=%s\n' "$runtime"
+  if [[ -d "$runtime/requests" && -d "$runtime/responses" ]]; then
+    printf '%s\n' 'broker_queue=present'
+  else
+    printf '%s\n' 'broker_queue=absent'
+  fi
+  if [[ -r "$pid_file" ]]; then
+    broker_pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+    printf 'broker_pid=%s\n' "${broker_pid:-unknown}"
+    if fedora_pid_matches "$broker_pid" android-bridge-broker.sh; then
+      printf '%s\n' 'broker_process=alive'
+    else
+      printf '%s\n' 'broker_process=not-owned-or-dead'
+    fi
+  else
+    printf '%s\n' 'broker_pid=missing'
+    printf '%s\n' 'broker_process=not-running'
+  fi
+  if [[ -x "$FEDORA_INSTALL_ROOT/integration/android-bridge.sh" ]]; then
+    printf '%s\n' 'bridge_client=present'
+  else
+    printf '%s\n' 'bridge_client=missing'
+  fi
+}
+
 guest_session_log_evidence() {
   local session_log="$FEDORA_TERMUX_PREFIX/tmp/fedora-session.log"
   printf 'session_log_path=%s\n' "$session_log"
@@ -193,6 +335,37 @@ guest_process_evidence() {
       else
         printf "%s\n" "missing"
       fi
+      printf "%s\n" "mutter_devkit_target="
+      if [[ -f /usr/libexec/mutter-devkit && ! -L /usr/libexec/mutter-devkit ]] \
+        && grep -Fq "fedora-shell-mutter-devkit-wrapper-v1" /usr/libexec/mutter-devkit 2>/dev/null; then
+        printf "%s\n" "fedora-shell-wrapper"
+      elif [[ -x /usr/libexec/mutter-devkit && ! -L /usr/libexec/mutter-devkit ]]; then
+        printf "%s\n" "rpm-or-unmanaged-binary"
+      elif [[ -L /usr/libexec/mutter-devkit ]]; then
+        printf "%s\n" "symlink-preserved"
+      else
+        printf "%s\n" "missing"
+      fi
+      printf "%s\n" "mutter_devkit_original="
+      if [[ -x /usr/local/libexec/fedora-shell/mutter-devkit.real \
+        && ! -L /usr/local/libexec/fedora-shell/mutter-devkit.real \
+        && -f /usr/local/libexec/fedora-shell/mutter-devkit.real.owner \
+        && ! -L /usr/local/libexec/fedora-shell/mutter-devkit.real.owner ]] \
+        && grep -Fq "fedora-shell-mutter-devkit-real-v1" \
+          /usr/local/libexec/fedora-shell/mutter-devkit.real.owner 2>/dev/null; then
+        printf "%s\n" "saved-and-owned"
+      else
+        printf "%s\n" "not-saved"
+      fi
+      printf "%s\n" "mutter_devkit_restore_helper="
+      if [[ -x /usr/local/libexec/fedora-shell/restore-mutter-devkit \
+        && ! -L /usr/local/libexec/fedora-shell/restore-mutter-devkit ]] \
+        && grep -Fq "fedora-shell-mutter-devkit-restore-v1" \
+          /usr/local/libexec/fedora-shell/restore-mutter-devkit 2>/dev/null; then
+        printf "%s\n" "present"
+      else
+        printf "%s\n" "missing"
+      fi
       printf "%s\n" "pipewire_client_probe="
       XDG_RUNTIME_DIR=/tmp/fedora-runtime \
       PIPEWIRE_RUNTIME_DIR=/tmp/fedora-runtime \
@@ -200,6 +373,28 @@ guest_process_evidence() {
       PIPEWIRE_CORE=pipewire-0 \
         pw-cli -r pipewire-0 info 0 2>&1 || true
     '
+}
+
+guest_systemd_marker_evidence() {
+  if ! fedora_container_exists; then
+    printf '%s\n' 'guest_systemd_marker=container-not-installed'
+    return 0
+  fi
+  # This is a read-only guest-root probe. It reports the exact marker and the
+  # temporary backups used by start.sh or fedora-session; it never moves or
+  # removes either path.
+  # shellcheck disable=SC2016
+  fedora_pd_login_root /bin/bash -c '
+    marker=/run/systemd/seats
+    backup=/run/systemd/seats.fedora-shell-backup
+    session_backup=/tmp/fedora-runtime/systemd-seats-marker
+    pid1=unknown
+    [ -r /proc/1/comm ] && pid1="$(cat /proc/1/comm)"
+    printf "guest_pid1=%s\n" "$pid1"
+    [ -e "$marker" ] && printf "%s\n" "guest_systemd_marker=present" || printf "%s\n" "guest_systemd_marker=absent"
+    [ -e "$backup" ] && printf "%s\n" "guest_systemd_marker_backup=present" || printf "%s\n" "guest_systemd_marker_backup=absent"
+    [ -e "$session_backup" ] && printf "%s\n" "guest_session_marker_backup=present" || printf "%s\n" "guest_session_marker_backup=absent"
+  '
 }
 
 selinux_state="unknown"
@@ -237,6 +432,9 @@ fi
   printf 'kernel_release=%s\n' "$(uname -r 2>/dev/null || true)"
   printf 'ram_kib=%s\n' "$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
   printf 'memory_profile=%s\n' "$FEDORA_MEMORY_PROFILE"
+  printf 'android_apps_mode=%s\n' "$FEDORA_ANDROID_APPS_MODE"
+  printf 'keyboard_mode=%s\n' "$FEDORA_KEYBOARD_MODE"
+  printf '%s\n' 'keyboard_routing=focused-Termux:X11-Fedora-surface; Android global keys remain SystemUI-owned'
   printf 'settings_daemon=%s\n' "$FEDORA_SETTINGS_DAEMON"
   printf 'launch_terminal=%s\n' "$FEDORA_LAUNCH_TERMINAL"
   printf 'keyring_mode=%s\n' "$FEDORA_KEYRING_MODE"
@@ -260,6 +458,7 @@ fi
   printf 'devkit_gdk_backend=%s\n' "$FEDORA_DEVKIT_GDK_BACKEND"
   printf 'devkit_pipewire=%s\n' "$FEDORA_DEVKIT_PIPEWIRE"
   printf 'devkit_pipewire_config=%s\n' "$FEDORA_DEVKIT_PIPEWIRE_CONFIG"
+  printf 'devkit_debug=%s\n' "$FEDORA_DEVKIT_DEBUG"
   printf 'redacted=%s\n' "$([[ $REDACT -eq 1 ]] && echo yes || echo no)"
   printf 'state_dir=%s\n' "$FEDORA_STATE_DIR"
   printf 'install_root=%s\n' "$FEDORA_INSTALL_ROOT"
@@ -269,6 +468,8 @@ fi
 } > "$report"
 
 capture 'free space' df -Pk "$FEDORA_USER_HOME"
+capture 'Android RAM Plus / zRAM (read-only)' android_ramplus_snapshot
+capture 'Android app bridge (read-only)' android_app_bridge_evidence
 if [[ -x /system/bin/getprop ]]; then
   capture 'selected Android properties' /system/bin/getprop ro.product.model
 fi
@@ -286,6 +487,7 @@ if [[ "$MODE" == full ]]; then
   capture 'installed Termux packages' pkg list-installed
   capture 'Termux:X11 preferences' termux-x11-preference list
   capture 'host process RSS snapshot' process_memory_snapshot
+  capture 'Mutter Devkit viewer environment (filtered)' devkit_viewer_environment
   if [[ -x /system/bin/dumpsys ]]; then
     capture 'Android display' /system/bin/dumpsys display || true
     capture 'SurfaceFlinger' /system/bin/dumpsys SurfaceFlinger || true
@@ -296,6 +498,7 @@ if [[ "$MODE" == full ]]; then
   capture 'Fedora runtime sockets' guest_runtime_evidence
   capture 'Fedora session log tail' guest_session_log_evidence
   capture 'Fedora guest processes' guest_process_evidence
+  capture 'Fedora systemd marker (read-only)' guest_systemd_marker_evidence
 else
   if [[ -x /system/bin/settings ]]; then
     capture 'Android display settings' /system/bin/settings get system peak_refresh_rate || true
@@ -335,16 +538,19 @@ if (( FRAME_PACING )); then
 fi
 
 if (( REDACT )); then
-  redacted_report="${report}.redacted.$$"
-  if sed -E \
+  redacted_report="$(mktemp "${report%/*}/.fedora-redacted.XXXXXX" 2>/dev/null || true)"
+  if [[ -n "$redacted_report" ]] \
+    && fedora_report_path_is_safe "$redacted_report" \
+    && sed -E \
     -e 's#(/data/data/[^[:space:]]+)#<termux-private-path>#g' \
     -e 's#(/home/[^[:space:]]+)#<home-path>#g' \
     -e 's#(\[?[^]]*(serial(no)?|imei|imsi|meid|ssid|bssid)[^]]*\]?[[:space:]]*[:=][[:space:]]*)[^[:space:]]+#\1<redacted>#Ig' \
     -e 's#((serial(no)?|imei|imsi|meid|ssid|bssid|android_id)[^:=]*[=:][[:space:]]*)[^[:space:]]+#\1<redacted>#Ig' \
     "$report" > "$redacted_report"; then
+    chmod 600 "$redacted_report"
     mv -- "$redacted_report" "$report"
   else
-    rm -f -- "$redacted_report"
+    [[ -z "$redacted_report" ]] || rm -f -- "$redacted_report"
     fedora_warn "Could not create the redacted report; keep the full report private."
   fi
 fi

@@ -9,7 +9,17 @@ source "$AUDIO_SCRIPT_DIR/../scripts/lib/common.sh"
 fedora_require_termux
 fedora_require_non_root
 fedora_init_state
-report="${1:-$FEDORA_LOG_DIR/audio-$(date -u +%Y%m%dT%H%M%SZ).txt}"
+report="${1:-$FEDORA_LOG_DIR/audio-$(date -u +%Y%m%dT%H%M%SZ)-$$.txt}"
+report_parent="${report%/*}"
+[[ -n "$report_parent" ]] || report_parent=/
+fedora_prepare_directories "$report_parent" || {
+  fedora_die "Could not prepare the audio report directory: $report_parent"
+  exit 1
+}
+fedora_report_path_is_safe "$report" || {
+  fedora_die "Refusing an unsafe audio report path: $report"
+  exit 1
+}
 umask 077
 
 {

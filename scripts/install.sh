@@ -21,7 +21,7 @@ Usage: ./scripts/install.sh [OPTIONS]
 Options:
   --yes                    accept installer confirmations
   --allow-unknown-device  continue when the Android model is not recognised
-  --enable-boot            install the optional Termux:Boot hook
+  --enable-boot            install the safe, non-launching Termux:Boot observer
   --skip-x11-package       do not install termux-x11-nightly from x11-repo
   --experimental-gpu       install optional virgl bridge; never enables it automatically
   --memory-profile NAME    auto, low, balanced or performance (default: auto)
@@ -92,7 +92,7 @@ FEDORA_MEMORY_PROFILE="$(fedora_resolve_memory_profile "$FEDORA_MEMORY_PROFILE")
 fedora_init_log
 fedora_require_termux
 fedora_require_non_root
-for required_command in pkg uname df awk mkdir cp chmod date; do
+for required_command in pkg uname df awk mkdir cp chmod date mktemp; do
   fedora_require_cmd "$required_command"
 done
 
@@ -148,25 +148,28 @@ fedora_log "Memory profile: ${FEDORA_MEMORY_PROFILE} (use FEDORA_MEMORY_PROFILE=
 fedora_log "Free space check: ${free_kib:-unknown} KiB available; ${MIN_FREE_GIB} GiB requested."
 
 fedora_init_state
-{
-  printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'manufacturer=%q\n' "$device_manufacturer"
-  printf 'model=%q\n' "$device_model"
-  printf 'codename=%q\n' "$device_codename"
-  printf 'board=%q\n' "$device_board"
-  printf 'hardware=%q\n' "$device_hardware"
-  printf 'soc=%q\n' "$device_soc"
-  printf 'android_release=%q\n' "$android_release"
-  printf 'android_api=%q\n' "$android_api"
-  printf 'android_security_patch=%q\n' "$android_security_patch"
-  printf 'host_arch=%q\n' "$host_arch"
-  printf 'kernel_release=%q\n' "$kernel_release"
-  printf 'selinux=%q\n' "$selinux_state"
-  printf 'ram_kib=%q\n' "${ram_kib:-unknown}"
-  printf 'memory_profile=%q\n' "$FEDORA_MEMORY_PROFILE"
-  printf 'free_kib=%q\n' "${free_kib:-unknown}"
-} > "$FEDORA_STATE_DIR/install-device-probe.env"
-chmod 600 "$FEDORA_STATE_DIR/install-device-probe.env"
+if ! fedora_atomic_write "$FEDORA_STATE_DIR/install-device-probe.env" 600 <<EOF
+timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+manufacturer=$(printf '%q' "$device_manufacturer")
+model=$(printf '%q' "$device_model")
+codename=$(printf '%q' "$device_codename")
+board=$(printf '%q' "$device_board")
+hardware=$(printf '%q' "$device_hardware")
+soc=$(printf '%q' "$device_soc")
+android_release=$(printf '%q' "$android_release")
+android_api=$(printf '%q' "$android_api")
+android_security_patch=$(printf '%q' "$android_security_patch")
+host_arch=$(printf '%q' "$host_arch")
+kernel_release=$(printf '%q' "$kernel_release")
+selinux=$(printf '%q' "$selinux_state")
+ram_kib=$(printf '%q' "${ram_kib:-unknown}")
+memory_profile=$(printf '%q' "$FEDORA_MEMORY_PROFILE")
+free_kib=$(printf '%q' "${free_kib:-unknown}")
+EOF
+then
+  fedora_die "Could not record the device probe safely"
+  exit 1
+fi
 
 if ! fedora_confirm "Install/update Termux packages and the Fedora container now?"; then
   fedora_die "Installation cancelled."
@@ -183,11 +186,12 @@ if (( ! SKIP_X11_PACKAGE )); then
 else
   fedora_warn "Skipping termux-x11-nightly; start.sh will require a manually installed compatible X11 package."
 fi
-if [[ -x /system/bin/pm ]]; then
+if [[ -x /system/bin/pm || -x /system/bin/cmd ]]; then
   if fedora_android_package_installed com.termux.x11; then
-    fedora_log "Compatible Termux:X11 Android APK is installed."
+    fedora_log "Read-only check confirms the compatible Termux:X11 Android APK is installed."
   else
-    fedora_warn "Termux:X11 package is installed, but the companion Android APK com.termux.x11 was not found; install/open the official APK before starting GNOME."
+    package_check_rc=$?
+    fedora_warn "Could not confirm com.termux.x11 through the read-only Android package API (rc=$package_check_rc); install/open the compatible APK from the same source as Termux before starting GNOME."
   fi
 fi
 if (( INSTALL_EXPERIMENTAL_GPU )); then
@@ -202,17 +206,35 @@ fi
 fedora_require_pd
 install_root="$(fedora_install_root)"
 install_marker="$install_root/.fedora-shell-install"
+fedora_path_is_safe "$install_root" || {
+  fedora_die "Refusing an unsafe installation path: $install_root"
+  exit 1
+}
+fedora_install_root_path_is_safe "$install_root" || {
+  fedora_die "Installation root must be a safe child of the Termux home and outside the checkout: $install_root"
+  exit 1
+}
+if [[ -L "$install_root" || ( -e "$install_root" && ! -d "$install_root" ) ]]; then
+  fedora_die "Refusing an unsafe installation directory: $install_root"
+  exit 1
+fi
 if [[ -e "$install_root" && ! -f "$install_marker" ]]; then
   fedora_die "Refusing to use existing non-project directory: $install_root"
   exit 1
 fi
-mkdir -p "$install_root"
+fedora_prepare_directories "$install_root" || {
+  fedora_die "Could not prepare the installation directory safely: $install_root"
+  exit 1
+}
 if [[ ! -f "$install_marker" ]]; then
-  {
-    printf '%s\n' '# fedora-shell-install-marker-v1'
-    printf 'installed_by=%q\n' "$FEDORA_PROJECT_ROOT/scripts/install.sh"
-  } > "$install_marker"
-  chmod 600 "$install_marker"
+  if ! fedora_atomic_write "$install_marker" 600 <<EOF
+# fedora-shell-install-marker-v1
+installed_by=$(printf '%q' "$FEDORA_PROJECT_ROOT/scripts/install.sh")
+EOF
+  then
+    fedora_die "Could not create the installation marker safely"
+    exit 1
+  fi
 fi
 
 # Keep an installed copy so the one-tap shortcut remains usable after the
@@ -230,7 +252,18 @@ fedora_sync_project_tree "$source_project_root" "$install_root"
 
 write_config() {
   umask 077
-  {
+  local config_dir config_tmp
+  fedora_path_is_safe "$FEDORA_CONFIG_FILE" || return 1
+  if [[ -L "$FEDORA_CONFIG_FILE" \
+    || ( -e "$FEDORA_CONFIG_FILE" && ! -f "$FEDORA_CONFIG_FILE" ) ]]; then
+    fedora_die "Refusing to overwrite an unsafe Fedora config file: $FEDORA_CONFIG_FILE"
+    return 1
+  fi
+  config_dir="${FEDORA_CONFIG_FILE%/*}"
+  [[ -n "$config_dir" ]] || config_dir=/
+  [[ -d "$config_dir" && ! -L "$config_dir" ]] || return 1
+  config_tmp="$(mktemp "$config_dir/.fedora-config.XXXXXX")" || return 1
+  if ! {
     printf 'FEDORA_CONTAINER=%q\n' "$FEDORA_CONTAINER"
     printf 'FEDORA_IMAGE=%q\n' "$FEDORA_IMAGE"
     printf 'FEDORA_ARCH=%q\n' "$FEDORA_ARCH"
@@ -238,6 +271,12 @@ write_config() {
     printf 'FEDORA_GPU_MODE=%q\n' "$FEDORA_GPU_MODE"
     printf 'FEDORA_AUDIO_MODE=%q\n' "$FEDORA_AUDIO_MODE"
     printf 'FEDORA_MEMORY_PROFILE=%q\n' "$FEDORA_MEMORY_PROFILE"
+    printf 'FEDORA_LINUX_MODE_PROFILE=%q\n' "$FEDORA_LINUX_MODE_PROFILE"
+    printf 'FEDORA_LINUX_MODE_AUTO_RESUME=%q\n' "$FEDORA_LINUX_MODE_AUTO_RESUME"
+    printf 'FEDORA_ANDROID_APPS_MODE=%q\n' "$FEDORA_ANDROID_APPS_MODE"
+    printf 'FEDORA_ANDROID_APPS_SCOPE=%q\n' "$FEDORA_ANDROID_APPS_SCOPE"
+    printf 'FEDORA_ANDROID_BRIDGE_POLL_INTERVAL=%q\n' "$FEDORA_ANDROID_BRIDGE_POLL_INTERVAL"
+    printf 'FEDORA_KEYBOARD_MODE=%q\n' "$FEDORA_KEYBOARD_MODE"
     printf 'FEDORA_SETTINGS_DAEMON=%q\n' "$FEDORA_SETTINGS_DAEMON"
     printf 'FEDORA_LAUNCH_TERMINAL=%q\n' "$FEDORA_LAUNCH_TERMINAL"
     printf 'FEDORA_KEYRING_MODE=%q\n' "$FEDORA_KEYRING_MODE"
@@ -253,6 +292,7 @@ write_config() {
     printf 'FEDORA_DEVKIT_GDK_BACKEND=%q\n' "$FEDORA_DEVKIT_GDK_BACKEND"
     printf 'FEDORA_DEVKIT_PIPEWIRE=%q\n' "$FEDORA_DEVKIT_PIPEWIRE"
     printf 'FEDORA_DEVKIT_PIPEWIRE_CONFIG=%q\n' "$FEDORA_DEVKIT_PIPEWIRE_CONFIG"
+    printf 'FEDORA_DEVKIT_DEBUG=%q\n' "$FEDORA_DEVKIT_DEBUG"
     printf 'FEDORA_TERMUX_X11_LEGACY_DRAWING=%q\n' "$FEDORA_TERMUX_X11_LEGACY_DRAWING"
     printf 'FEDORA_TERMUX_X11_FORCE_BGRA=%q\n' "$FEDORA_TERMUX_X11_FORCE_BGRA"
     printf 'FEDORA_TERMUX_X11_AUTO_OPEN=%q\n' "$FEDORA_TERMUX_X11_AUTO_OPEN"
@@ -260,10 +300,24 @@ write_config() {
     printf 'FEDORA_INSTALL_ROOT=%q\n' "$install_root"
     printf 'FEDORA_SHARED_STORAGE=%q\n' "$FEDORA_SHARED_STORAGE"
     printf 'FEDORA_GUEST_PROJECT_ROOT=%q\n' "$FEDORA_GUEST_PROJECT_ROOT"
-  } > "$FEDORA_CONFIG_FILE"
+  } > "$config_tmp"; then
+    rm -f -- "$config_tmp"
+    return 1
+  fi
+  chmod 600 "$config_tmp"
+  [[ ! -L "$FEDORA_CONFIG_FILE" ]] || {
+    rm -f -- "$config_tmp"
+    fedora_die "Fedora config file became a symlink during update"
+    return 1
+  }
+  mv -f -- "$config_tmp" "$FEDORA_CONFIG_FILE"
+  [[ -f "$FEDORA_CONFIG_FILE" && ! -L "$FEDORA_CONFIG_FILE" ]] || return 1
   chmod 600 "$FEDORA_CONFIG_FILE"
 }
-write_config
+write_config || {
+  fedora_die "Could not write Fedora Shell configuration safely"
+  exit 1
+}
 
 if ! fedora_container_exists; then
   fedora_log "Installing official OCI image $FEDORA_IMAGE for $FEDORA_ARCH as $FEDORA_CONTAINER."
@@ -273,9 +327,14 @@ else
 fi
 
 fedora_init_state
-"$FEDORA_PD_BIN" list --image > "$FEDORA_STATE_DIR/proot-images.txt" 2>&1 || true
-"$FEDORA_PD_BIN" list > "$FEDORA_STATE_DIR/proot-containers.txt" 2>&1 || true
-chmod 600 "$FEDORA_STATE_DIR/proot-images.txt" "$FEDORA_STATE_DIR/proot-containers.txt"
+if ! "$FEDORA_PD_BIN" list --image 2>&1 \
+  | fedora_atomic_write "$FEDORA_STATE_DIR/proot-images.txt" 600; then
+  fedora_warn "Could not record the proot image inventory atomically"
+fi
+if ! "$FEDORA_PD_BIN" list 2>&1 \
+  | fedora_atomic_write "$FEDORA_STATE_DIR/proot-containers.txt" 600; then
+  fedora_warn "Could not record the proot container inventory atomically"
+fi
 
 fedora_log "Installing GNOME packages inside Fedora. This can take a while under PRoot."
 fedora_pd_login_root /usr/bin/env \
@@ -294,7 +353,17 @@ if (( ENABLE_BOOT )); then
     "$install_root/integration/boot/fedora-shell" \
     "$FEDORA_BOOT_DIR/fedora-shell" \
     'fedora-shell-boot-v1'
-  fedora_log "Installed optional Termux:Boot hook. Android battery/background policy may still require manual action."
+  fedora_log "Installed safe Termux:Boot observer; visible Fedora launch remains owned by the selected Home Activity."
+elif [[ -f "$FEDORA_BOOT_DIR/fedora-shell" ]] \
+  && grep -Fq 'fedora-shell-boot-v1' "$FEDORA_BOOT_DIR/fedora-shell"; then
+  # Older releases used this owned path to start a hidden Fedora session after
+  # boot. Replace that project-owned hook even without --enable-boot so an
+  # update cannot leave a background RAM consumer behind.
+  fedora_install_owned_file \
+    "$install_root/integration/boot/fedora-shell" \
+    "$FEDORA_BOOT_DIR/fedora-shell" \
+    'fedora-shell-boot-v1'
+  fedora_log "Replaced the old hidden Termux:Boot launcher with a safe observer."
 fi
 
 fedora_log "Running quick diagnostics. A non-zero optional probe does not change the install result."
@@ -311,12 +380,17 @@ Installed control tree: $install_root
 State and logs: $FEDORA_STATE_DIR
 
 Next steps:
-  1. Install/open the compatible Termux:X11 APK once and confirm its fullscreen/touch preferences.
-  2. Run: $install_root/scripts/start.sh
-  3. If the window is black, retry with: $install_root/scripts/start.sh --legacy-drawing
-  4. For a shareable redacted report: $install_root/scripts/diagnostics.sh --full --redact
+  1. Build/install the Android controller from android/ and complete its initial GUI setup.
+  2. Install/open the compatible Termux:X11 APK once; keep device fullscreen off for bottom-swipe navigation and configure touch manually.
+  3. Use Linux Mode -> ON in Fedora Shell, or run: $install_root/scripts/linux-mode.sh enable
+  4. If the window is black, retry with: $install_root/scripts/start.sh --legacy-drawing
+  5. For a shareable redacted report: $install_root/scripts/diagnostics.sh --full --redact
 
 Memory profile: $FEDORA_MEMORY_PROFILE (12 GiB devices use the conservative profile automatically).
+
+Android safety contract: this installer does not disable, delete, force-stop or
+reconfigure Android packages, settings, services, LMKD or zRAM. Android remains
+the host; the GUI can only ask the user to choose Fedora Shell as the Home app.
 
 The GNOME session remains Wayland-first. Pure X11 requires explicit
 FEDORA_ALLOW_X11=1 and is not enabled by this installer.

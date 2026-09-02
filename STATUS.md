@@ -1,6 +1,6 @@
-# Статус на 2026-08-31
+# Статус на 2026-09-02
 
-Статус отражает код и журналы владельца устройства на 2026-08-31. Полного
+Статус отражает код и журналы владельца устройства на 2026-09-02. Полного
 redacted diagnostics-файла нет, поэтому факты из консольного вывода отмечены
 как наблюдённые, а аппаратные свойства, которых в нём нет, остаются
 `UNTESTED`. Не меняйте `PARTIAL`/`UNTESTED` на `WORKING` без повторяемого
@@ -9,12 +9,26 @@ redacted diagnostics-файла нет, поэтому факты из конс�
 Допустимые значения: `WORKING`, `PARTIAL`, `ANDROID-BRIDGED`, `BROKEN`,
 `UNSUPPORTED`, `UNTESTED`.
 
+Подробный разбор причин чёрного экрана, границ Android-интеграции и
+проверенных источников находится в [AUDIT.md](AUDIT.md). Эта рабочая копия ещё
+не опубликована в Git remote и не установлена на планшет после последних
+правок.
+
 Последний аудит журнала показал не ошибку установки Fedora, а потерю
-`mutter-devkit` после публикации nested Wayland-сокета. В следующем запуске
-supervisor теперь проверяет живой viewer, сохраняет состояние PipeWire и
-runtime-сокетов в full diagnostics и не объявляет чёрную/невидимую сессию
-успешной. Визуальный результат на планшете всё ещё требует повторного
-acceptance-теста после обновления control tree.
+`mutter-devkit` после публикации nested Wayland-сокета. Supervisor теперь
+проверяет живой viewer, сохраняет состояние PipeWire и runtime-сокетов в full
+diagnostics и не объявляет чёрную/невидимую сессию успешной. Для гонки запуска
+добавлен обратимый Fedora-only shim на точном пути
+`/usr/libexec/mutter-devkit`: он ждёт официальное
+`org.gnome.Mutter.Devkit` `Env`, затем запускает сохранённый RPM binary. Перед
+`dnf` исходный binary восстанавливается, после пакетной операции shim
+устанавливается заново. Неправильный standalone fallback удалён.
+При отключённых portal проект не создаёт фальшивые D-Bus service-файлы для
+portal; это убирает искусственные `ChildExited`/`AccessDenied` из старой схемы.
+Визуальный результат на планшете всё ещё требует повторного acceptance-теста
+после обновления control tree. Android contract зафиксирован: изменяются
+только Fedora/Termux user-space и локальное состояние приложения; Android
+policy, One UI и системные процессы не изменяются.
 
 ## Основные компоненты
 
@@ -44,7 +58,7 @@ acceptance-теста после обновления control tree.
 | S Pen position | Android → input | UNTESTED | pointer coordinate test |
 | S Pen pressure | Wayland tablet protocol | UNTESTED | Xournal++ pressure test |
 | S Pen hover/tilt | Android MotionEvent bridge | UNTESTED | Android event capture |
-| Samsung keyboard | Android/Termux input | UNTESTED | modifier/media key matrix |
+| Samsung keyboard | Linux Mode focused Termux:X11 → Wayland | PARTIAL | ordinary modifier matrix requires device test; Android global shortcuts remain SystemUI-owned |
 | Touchpad | Android/Termux input | UNTESTED | click/scroll/gesture matrix |
 | Audio output | Android/Termux Pulse transport | UNTESTED | speaker/Bluetooth/USB |
 | Microphone | Termux:API/Android audio | UNTESTED | PipeWire/Pulse capture |
@@ -58,16 +72,18 @@ acceptance-теста после обновления control tree.
 | Clipboard | Termux API ↔ Wayland | UNTESTED | text/URL/image test |
 | Shared files | SAF / shared storage bind | PARTIAL | bind only when user grants storage |
 | Camera | Android app/bridge | ANDROID-BRIDGED | launcher path only |
-| Android apps | explicit package intents | PARTIAL | allowlisted desktop entries; package IDs user supplied |
+| Android apps | local Termux broker + dynamic Fedora `.desktop` entries + explicit package launch | ANDROID-BRIDGED | launchable Android apps are enumerated read-only (all launchable packages by default; optional third-party-only scope) and shown above Fedora by Android SurfaceFlinger; native Wayland embedding and device acceptance remain untested |
 | Notifications | optional Android bridge | UNTESTED | no listener enabled by default |
 | Suspend/resume | Android-owned lifecycle | UNTESTED | screen off/wake/reconnect |
 | Flatpak | namespaces/bwrap in PRoot | UNSUPPORTED | use RPM/AppImage unless tested |
 | Fedora update | backup + `dnf upgrade` | PARTIAL | user log: package update completes; project-tree synchronization is now included |
-| Memory profile | auto → low on ~12 GiB host | WORKING (policy) | low profile disables idle helpers, uses 2560×1600 nested mode, trims glibc arenas and records RSS/PSS; measure actual savings with `diagnostics.sh --full --redact` |
+| Memory profile | auto → low on ~12 GiB host | WORKING (policy) | low profile disables idle helpers, uses 1920×1200 nested mode, trims glibc arenas and records cache/PSI/swap plus RSS/PSS; explicit Maximum Linux uses 1600×1000; measure actual savings with `linux-mode.sh memory` |
+| Linux Mode controller | Android app + Termux/PRoot state machine | PARTIAL | GUI wizard, three Fedora-side profiles, atomic recovery state and read-only Android receipt implemented; device acceptance pending |
+| Home crash recovery | read-only `status` callback + recovery dialog | PARTIAL | Android GUI offers Resume/Restore after `crashed`/`exited`/`needs-recovery`; build and device acceptance pending |
 | Backup/restore | PRoot archive + host state | PARTIAL | run restore verification on device |
 | Reset/uninstall | scoped container/file removal | PARTIAL | script safety tests; device dry run pending |
-| Android launcher APK | Home/emergency UI + Termux RUN_COMMAND | UNTESTED | build/install and permission test pending |
-| Android bridge client | allowlisted Termux:API/intents | PARTIAL | shell/API paths exist; Android permission test pending |
+| Android launcher APK | initial GUI + user-selected Home + Termux RUN_COMMAND | UNTESTED | build/install, wizard and Home-role acceptance test pending |
+| Android bridge client | allowlisted read-only probes/intents + shared-tmp app broker | ANDROID-BRIDGED | broker lifecycle, bounded request protocol and fail-closed catalog are implemented; Android API 36 foreground-start acceptance test pending |
 
 ## Наблюдённый baseline устройства
 
@@ -76,6 +92,7 @@ acceptance-теста после обновления control tree.
 | Manufacturer/model | Samsung `SM-X930` | user-provided installer log |
 | Android | 16 / API 36 | user-provided installer log |
 | Host architecture | `aarch64` | user-provided installer log |
+| RAM | 11788036 KiB (~12 GiB) | user-provided engineering probe |
 | Free space at install | 319880192 KiB (later 318674260 KiB) | user-provided installer log |
 | Fedora userspace | `fedora:44`, `aarch64` | user-provided PRoot-Distro log |
 | GNOME/Mutter | 50.4 on Fedora 44 | user-provided Fedora package/log output |
@@ -83,10 +100,10 @@ acceptance-теста после обновления control tree.
 | GPU state observed | no hardware renderer; surfaceless/software fallback | user-provided `fedora-session.log` |
 
 This baseline does not include `ro.soc.model`, panel mode, Vulkan device,
-RAM, SELinux state or a redacted full report. Collect them with:
+SELinux state or a redacted full report. Collect them with:
 
 ```bash
-./scripts/diagnostics.sh --full --redact --frame-pacing
+bash ./scripts/diagnostics.sh --full --redact --frame-pacing
 ```
 
 ## Wayland-specific status

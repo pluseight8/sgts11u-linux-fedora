@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Marker: fedora-shell-mutter-devkit-wrapper-v1
+#
+# GNOME's --devkit compositor starts mutter-devkit directly. The viewer then
+# asks the compositor-owned org.gnome.Mutter.Devkit object for the nested
+# WAYLAND_DISPLAY. On a slow Android/PRoot guest the child can start before
+# that object has been published and exits with "No launch environment
+# available". Wait for the official object/property instead of starting a
+# second standalone viewer (which cannot create that environment itself).
+
+real_devkit=/usr/local/libexec/fedora-shell/mutter-devkit.real
+if [[ ! -x "$real_devkit" || -L "$real_devkit" ]]; then
+  printf '[fedora-mutter-devkit] original mutter-devkit is unavailable: %s\n' \
+    "$real_devkit" >&2
+  exit 127
+fi
+
+# Keep package inspection and troubleshooting commands useful when no
+# compositor is running. The normal GNOME-launched viewer has no arguments.
+case "${1:-}" in
+  --help|--help-all|-h|--version)
+    exec -a /usr/libexec/mutter-devkit "$real_devkit" "$@"
+    ;;
+esac
+
+gdbus_bin="$(command -v gdbus 2>/dev/null || true)"
+if [[ -z "$gdbus_bin" ]]; then
+  printf '%s\n' '[fedora-mutter-devkit] gdbus is missing; cannot wait for Mutter Devkit environment' >&2
+  exit 127
+fi
+
+connection_args=()
+if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+  connection_args=(--address "$DBUS_SESSION_BUS_ADDRESS")
+elif [[ -n "${DBUS_STARTER_ADDRESS:-}" ]]; then
+  connection_args=(--address "$DBUS_STARTER_ADDRESS")
+else
+  printf '%s\n' '[fedora-mutter-devkit] no private session D-Bus address is available' >&2
+  exit 125
+fi
+
+# MetaMdk starts this binary directly and supplies DISPLAY/WAYLAND_DISPLAY,
+# but it deliberately does not select the GTK backend for the viewer.  The
+# outer transport in this project is normally Termux:X11, while the GNOME
+# Shell child remains a Wayland client.  Keep the backend choice explicit so
+# the viewer cannot inherit GDK_BACKEND=wayland and disappear from the X11
+# surface.  This variable is Fedora-local and is not an Android setting.
+viewer_backend="${FEDORA_DEVKIT_VIEWER_GDK_BACKEND:-x11}"
+case "$viewer_backend" in
+  x11|wayland)
+    export GDK_BACKEND="$viewer_backend"
+    ;;
+  *)
+    printf '[fedora-mutter-devkit] invalid viewer GTK backend: %s\n' "$viewer_backend" >&2
+    exit 64
+    ;;
+esac
+
+wait_seconds="${FEDORA_DEVKIT_ACTIVATION_TIMEOUT:-15}"
+[[ "$wait_seconds" =~ ^[1-9][0-9]?$ ]] || wait_seconds=15
+deadline=$((SECONDS + wait_seconds))
+
+dbus_call() {
+  # gdbus has its own bounded method timeout. The outer timeout protects the
+  # wrapper from a broken local bus while keeping the GNOME session finite.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM 2 "$gdbus_bin" call "${connection_args[@]}" \
+      --timeout=1 "$@"
+  else
+    "$gdbus_bin" call "${connection_args[@]}" --timeout=1 "$@"
+  fi
+}
+
+while (( SECONDS < deadline )); do
+  owner_output="$(dbus_call \
+    --dest org.freedesktop.DBus \
+    --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.NameHasOwner \
+    org.gnome.Mutter.Devkit 2>/dev/null || true)"
+  if [[ "$owner_output" == *"(true"* ]]; then
+    # Env is the official a{ss} property exported by MetaMdk. Require a real
+    # nested display name before handing control to the GTK viewer.
+    env_output="$(dbus_call \
+      --dest org.gnome.Mutter.Devkit \
+      --object-path /org/gnome/Mutter/Devkit \
+      --method org.freedesktop.DBus.Properties.Get \
+      org.gnome.Mutter.Devkit Env 2>/dev/null || true)"
+    if [[ "$env_output" =~ WAYLAND_DISPLAY[^[:alnum:]_/-]*wayland-[0-9]+ ]]; then
+      exec -a /usr/libexec/mutter-devkit "$real_devkit" "$@"
+    fi
+  fi
+  sleep 0.1
+done
+
+printf '[fedora-mutter-devkit] Mutter did not publish org.gnome.Mutter.Devkit Env within %ss\n' \
+  "$wait_seconds" >&2
+exit 125

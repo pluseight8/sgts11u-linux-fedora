@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "description": "Read-only user-maintained Android package list for Linux Mode reports. Android package and memory policy is never changed by this project.",
+  "alwaysKeepPackages": [
+    "com.termux",
+    "com.termux.x11",
+    "com.termux.api",
+    "com.pluseight8.fedorashell"
+  ],
+  "userSelectedKeepPackages": [],
+  "usage": "reporting-only",
+  "notes": [
+    "This file is informational and is used to label packages the user wants to keep visible in reports.",
+    "Linux Mode does not change Android settings, AppOps, package state, process state, LMKD, zRAM, kernel parameters, or system services.",
+    "Unknown packages are left untouched. Add only exact package names that the user wants documented as important."
+  ]
+}

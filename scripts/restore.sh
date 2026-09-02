@@ -39,7 +39,10 @@ fedora_require_termux
 fedora_require_non_root
 fedora_require_pd
 fedora_require_cmd tar
-[[ -f "$archive" ]] || { fedora_die "Backup does not exist: $archive"; exit 1; }
+[[ -f "$archive" && ! -L "$archive" ]] || {
+  fedora_die "Backup must be a regular, non-symlink file: $archive"
+  exit 1
+}
 
 top_levels="$(tar -tf "$archive" 2>/dev/null | awk -F/ 'NF { print $1 }' | sort -u)"
 [[ "$top_levels" == "$FEDORA_CONTAINER" ]] || {
@@ -52,8 +55,25 @@ if fedora_container_exists; then
     fedora_die "Restore cancelled."
     exit 1
   fi
+  stop_script="$FEDORA_INSTALL_ROOT/scripts/stop.sh"
+  if [[ -x "$stop_script" && ! -L "$stop_script" ]]; then
+    if ! bash "$stop_script" --yes; then
+      fedora_die "Could not stop Fedora Shell cleanly; refusing destructive restore."
+      exit 1
+    fi
+  else
+    fedora_warn "Installed stop helper is unavailable; stopping recorded project transports directly."
+    fedora_stop_owned_transports
+  fi
   if fedora_container_running; then
-    "$FEDORA_PD_BIN" kill "$FEDORA_CONTAINER" || true
+    if ! "$FEDORA_PD_BIN" kill "$FEDORA_CONTAINER"; then
+      fedora_die "Could not stop Fedora container '$FEDORA_CONTAINER'; refusing destructive restore."
+      exit 1
+    fi
+  fi
+  if fedora_container_running; then
+    fedora_die "Fedora container '$FEDORA_CONTAINER' is still running; refusing destructive restore."
+    exit 1
   fi
   "$FEDORA_PD_BIN" remove "$FEDORA_CONTAINER"
 fi

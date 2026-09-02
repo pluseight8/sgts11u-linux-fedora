@@ -22,7 +22,7 @@ Options:
   --no-install            only prepare the checkout
   --yes                   pass --yes to scripts/install.sh
   --allow-unknown-device pass --allow-unknown-device to the installer
-  --enable-boot           pass --enable-boot to the installer
+  --enable-boot           install the safe, non-launching Termux:Boot observer
   --skip-x11-package      pass --skip-x11-package to the installer
   --experimental-gpu      pass --experimental-gpu to the installer
   --memory-profile NAME   pass --memory-profile NAME to the installer

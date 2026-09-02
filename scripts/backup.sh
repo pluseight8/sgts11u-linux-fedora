@@ -50,7 +50,25 @@ if [[ -z "$BACKUP_DIR" ]]; then
     BACKUP_DIR="$FEDORA_USER_HOME/FedoraBackups"
   fi
 fi
+[[ "$BACKUP_DIR" == /* ]] || {
+  fedora_die "Backup output must be an absolute path: $BACKUP_DIR"
+  exit 64
+}
+case "$BACKUP_DIR" in
+  */../*|*/..|*/./*|*/.)
+    fedora_die "Refusing a backup output path with dot components: $BACKUP_DIR"
+    exit 1
+    ;;
+esac
+if [[ -L "$BACKUP_DIR" || ( -e "$BACKUP_DIR" && ! -d "$BACKUP_DIR" ) ]]; then
+  fedora_die "Refusing a symlinked or non-directory backup output: $BACKUP_DIR"
+  exit 1
+fi
 mkdir -p "$BACKUP_DIR"
+[[ -d "$BACKUP_DIR" && ! -L "$BACKUP_DIR" ]] || {
+  fedora_die "Backup output directory became unsafe: $BACKUP_DIR"
+  exit 1
+}
 chmod 700 "$BACKUP_DIR" 2>/dev/null || true
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -58,24 +76,39 @@ archive="$BACKUP_DIR/${FEDORA_CONTAINER}-${timestamp}.tar.xz"
 host_archive="$BACKUP_DIR/${FEDORA_CONTAINER}-${timestamp}.host.tar.xz"
 manifest="$BACKUP_DIR/${FEDORA_CONTAINER}-${timestamp}.manifest.txt"
 for path in "$archive" "$host_archive" "$manifest"; do
-  [[ ! -e "$path" ]] || { fedora_die "Refusing to overwrite existing backup: $path"; exit 1; }
+  [[ ! -e "$path" && ! -L "$path" ]] || {
+    fedora_die "Refusing to overwrite existing backup: $path"
+    exit 1
+  }
 done
 
 fedora_log "Archiving container $FEDORA_CONTAINER to $archive."
 "$FEDORA_PD_BIN" backup "$FEDORA_CONTAINER" --output "$archive"
+[[ -f "$archive" && ! -L "$archive" ]] || {
+  fedora_die "PRoot-Distro reported success but did not create a regular backup archive: $archive"
+  exit 1
+}
 
 host_items=()
 for item in config.env install-device-probe.env proot-images.txt proot-containers.txt; do
-  [[ -f "$FEDORA_STATE_DIR/$item" ]] && host_items+=("$item")
+  [[ -f "$FEDORA_STATE_DIR/$item" && ! -L "$FEDORA_STATE_DIR/$item" ]] && host_items+=("$item")
 done
 if (( ${#host_items[@]} > 0 )); then
   tar -cJf "$host_archive" -C "$FEDORA_STATE_DIR" "${host_items[@]}"
+  [[ -f "$host_archive" && ! -L "$host_archive" ]] || {
+    fedora_die "Host-state archive was not created as a regular file: $host_archive"
+    exit 1
+  }
 else
   fedora_warn "No host state files were present; creating an empty metadata archive was skipped."
   host_archive=""
 fi
 
-{
+manifest_tmp="$(mktemp "$BACKUP_DIR/.fedora-manifest.XXXXXX")" || {
+  fedora_die "Could not create the backup manifest atomically"
+  exit 1
+}
+if ! {
   printf 'fedora-shell-backup-v1\n'
   printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'container=%s\n' "$FEDORA_CONTAINER"
@@ -86,7 +119,22 @@ fi
   printf '\n[sha256]\n'
   sha256sum "$archive"
   [[ -n "$host_archive" ]] && sha256sum "$host_archive"
-} > "$manifest"
+} > "$manifest_tmp"; then
+  rm -f -- "$manifest_tmp"
+  fedora_die "Could not write the backup manifest"
+  exit 1
+fi
+chmod 600 "$manifest_tmp"
+[[ ! -L "$manifest" ]] || {
+  rm -f -- "$manifest_tmp"
+  fedora_die "Backup manifest became a symlink during creation: $manifest"
+  exit 1
+}
+mv -f -- "$manifest_tmp" "$manifest"
+[[ -f "$manifest" && ! -L "$manifest" ]] || {
+  fedora_die "Backup manifest failed its final safety check: $manifest"
+  exit 1
+}
 chmod 600 "$archive" "$manifest"
 [[ -z "$host_archive" ]] || chmod 600 "$host_archive"
 fedora_log "Backup complete. Rootfs processes are not preserved; keep the manifest with the archives."

@@ -41,8 +41,19 @@ fedora_require_termux
 fedora_require_non_root
 fedora_require_container
 
+stop_script="$FEDORA_INSTALL_ROOT/scripts/stop.sh"
+if [[ -x "$stop_script" && ! -L "$stop_script" ]]; then
+  if ! bash "$stop_script" --yes; then
+    fedora_die "Could not stop Fedora Shell cleanly; refusing update/backup."
+    exit 1
+  fi
+else
+  fedora_warn "Installed stop helper is unavailable; stopping recorded project transports directly."
+  fedora_stop_owned_transports
+fi
 if fedora_container_running; then
-  "$FEDORA_ENTRY_DIR/stop.sh" --yes
+  fedora_die "Fedora container '$FEDORA_CONTAINER' is still running; refusing update/backup."
+  exit 1
 fi
 if (( MAKE_BACKUP )); then
   "$FEDORA_ENTRY_DIR/backup.sh" --yes
@@ -100,10 +111,29 @@ else
 fi
 
 fedora_log "Updating Fedora packages inside the existing container."
+if ! fedora_pd_login_root /bin/bash -c '
+  target=/usr/libexec/mutter-devkit
+  helper=/usr/local/libexec/fedora-shell/restore-mutter-devkit
+  if [ -f "$target" ] && [ ! -L "$target" ] \
+    && grep -Fq "fedora-shell-mutter-devkit-wrapper-v1" "$target" 2>/dev/null; then
+    [ -x "$helper" ] && [ ! -L "$helper" ] \
+      && grep -Fq "fedora-shell-mutter-devkit-restore-v1" "$helper" 2>/dev/null \
+      || { printf "%s\n" "Active Mutter Devkit wrapper has no trusted package helper." >&2; exit 1; }
+    exec "$helper"
+  fi
+'; then
+  fedora_die "Could not restore the original Mutter Devkit binary before the Fedora package transaction."
+  exit 1
+fi
 fedora_pd_login_root /usr/bin/dnf -y upgrade --refresh --setopt=install_weak_deps=False
 fedora_pd_login_root /usr/bin/dnf -y clean all
 fedora_sync_guest_config
-"$FEDORA_PD_BIN" list --image > "$FEDORA_STATE_DIR/proot-images.txt" 2>&1 || true
-"$FEDORA_PD_BIN" list > "$FEDORA_STATE_DIR/proot-containers.txt" 2>&1 || true
-chmod 600 "$FEDORA_STATE_DIR/proot-images.txt" "$FEDORA_STATE_DIR/proot-containers.txt"
+if ! "$FEDORA_PD_BIN" list --image 2>&1 \
+  | fedora_atomic_write "$FEDORA_STATE_DIR/proot-images.txt" 600; then
+  fedora_warn "Could not record the proot image inventory atomically"
+fi
+if ! "$FEDORA_PD_BIN" list 2>&1 \
+  | fedora_atomic_write "$FEDORA_STATE_DIR/proot-containers.txt" 600; then
+  fedora_warn "Could not record the proot container inventory atomically"
+fi
 fedora_log "Update complete. Run diagnostics before changing FEDORA_GPU_MODE."

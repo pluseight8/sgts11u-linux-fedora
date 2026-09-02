@@ -1,6 +1,6 @@
 # Архитектура и решения
 
-Дата среза исследования: **2026-08-31**.
+Дата среза исследования: **2026-09-02**.
 
 ## 1. Границы безопасности
 
@@ -25,11 +25,10 @@ services. Проект не скрывает эти ограничения.
 1. Direct Android Surface → native Wayland compositor       (future adapter)
 2. Mutter/GNOME Wayland with Android-compatible backend      (probe)
 3. Nested GNOME Shell/Mutter Wayland                        (current target)
-4. Weston/other nested Wayland transport                    (fallback research)
-5. Other Android Wayland frontend                           (candidate: tawc-like)
-6. Termux:X11 transport → nested GNOME Wayland              (current transport)
-7. XWayland for legacy applications                         (allowed)
-8. Full X11 GNOME session                                   (explicit temporary fallback)
+4. Weston/other nested Wayland transport                    (not enabled)
+5. Termux:X11 transport → nested GNOME Wayland              (current transport)
+6. XWayland for legacy applications                         (allowed)
+7. Full X11 GNOME session                                   (explicit temporary fallback)
 ```
 
 На штатном Android наиболее проверенным публичным транспортом остаётся
@@ -131,15 +130,85 @@ GNOME adapters (future)
 ```
 
 Linux client использует allowlisted commands и не открывает сетевой listener.
-Это снижает поверхность атаки по сравнению с daemon на `0.0.0.0`. Прямой
-loopback bridge с токеном может быть добавлен позже после отдельной модели
-pairing/permission; в текущем прототипе Termux:API и RUN_COMMAND являются
-каноническим non-root transport.
+Когда Fedora-сессия активна, `scripts/start.sh` запускает
+`integration/android-bridge-broker.sh` в обычном Termux UID. Клиент в PRoot
+передаёт через private shared-tmp только `list-apps`, `launch-package` и
+фиксированные `launch-intent`; запросы и ответы валидируются, не source-ятся и
+ограничены по размеру. PID broker привязан к project-owned Termux:X11
+transport, а `stop.sh` удаляет очередь, чтобы не было отложенного запуска.
 
-The optional Android APK in `android/` is intentionally split from the Linux
-client. Its Home activity is user-selectable and its boot receiver is disabled
-by default. It sends only fixed `start.sh`, `stop.sh` and `diagnostics.sh`
+`sync-apps` создаёт только Fedora user `.desktop` entries. Выбранное
+Android-приложение запускается штатным Android resolver и рисуется
+SurfaceFlinger поверх Termux:X11. Это foreground hand-off, не native window
+embedding в Wayland: rootless PRoot не может встроить произвольную Android
+Activity в Mutter. При недоступном broker/resolver каталог не очищается.
+Прямой loopback listener и background policy manager намеренно не добавляются:
+они расширили бы поверхность атаки и нарушили Android safety contract.
+
+The Android controller APK in `android/` is intentionally split from the Linux
+client. Its first-run GUI is mandatory before the ON action is enabled. The
+activity is a user-selectable Home candidate, and its auto-resume preference is
+off by default. Its boot receiver is an observer/no-op and never launches a
+hidden session. It sends only fixed `linux-mode.sh`, diagnostics and recovery
 requests to Termux; the in-process `AndroidBridgeService` is not exported.
+
+The controller hides only the persistent status bar while it is visible and
+keeps the bottom navigation/mandatory-gesture region available. Android owns
+the volume panel, notification shade and navigation; Fedora cannot block these
+protected SystemUI surfaces. The visible desktop is a separate Termux:X11
+Activity, so its user-controlled `Fullscreen on device display` preference must
+remain off when reliable bottom-swipe or Back/Home buttons are needed. Fedora
+Shell never changes that preference.
+
+The Linux Mode controller is deliberately not an Android memory governor. It
+owns only Fedora/Termux project processes and Fedora-side environment choices.
+The Android memory report is read-only: it samples `/proc`, optional
+`dumpsys meminfo`, zRAM/swap counters, PSI and best-effort Fedora PSS. The
+allowlist is reporting metadata, not a package-control list. No Android
+setting, AppOps value, package state, process state, LMKD/zRAM setting, kernel
+parameter or system service is changed, so there is no Android policy to
+restore when Linux Mode is disabled.
+
+An unexpected non-zero Fedora/Devkit exit gets one bounded, sequential restart
+attempt after the first `start.sh` process has returned and cleaned its
+project-owned transport. There is no retry loop and no second concurrent PRoot
+session; if the retry fails, the state is `crashed` and the user gets explicit
+recovery controls.
+
+The report also separates reclaimable/cache counters from `MemAvailable`, keeps
+Android framework totals distinct from process PSS, and reports GPU memory as
+unknown when the Android driver does not expose a reliable unprivileged value.
+`SurfaceFlinger` PSS is never treated as GPU VRAM. This is the boundary for
+Android-side optimization: measure and explain pressure, then let Android's
+own LMKD/cached-app freezer/zRAM policy decide what to reclaim.
+
+Samsung `RAM Plus` has a separate boundary: it is an Android/OEM user setting,
+not a Fedora control. The project does not try to infer its exact UI state from
+zRAM, does not enable or resize it, and reports `android.ramPlus.setting` as
+`not-readable` when an unprivileged Termux probe cannot access an OEM API. The
+report may still include read-only zRAM sysfs counters and clearly labels them
+as indirect. This preserves the requirement that Android and One UI are not
+modified while still showing whether the shared kernel exposes a swap backend.
+
+### Linux Mode state machine
+
+```text
+Android Mode
+  → user completes GUI setup and optionally selects Fedora Shell as Home
+  → Linux Mode ON
+  → read-only before snapshot
+  → Termux:X11 + Fedora/PRoot + Mutter Devkit + GNOME Wayland
+  → read-only after snapshot
+  → Linux Mode OFF / recovery
+  → only project-owned processes stop
+  → Android Mode remains unchanged; Home is selected by Android
+```
+
+The state file and no-change receipt are written atomically. An interrupted
+session is reported as `crashed`/`needs-recovery`; recovery stops only recorded
+Fedora/Termux resources and never starts a kill/restart loop. If Fedora Shell
+is selected as Home, returning to One UI still requires the user to choose One
+UI Home in Android's Home app settings.
 
 ### Реальные Android ограничения
 
@@ -164,13 +233,18 @@ refresh mode. Fedora не создаёт второй security lock screen. `sta
 GNOME helpers (settings daemon, terminal, WirePlumber, pipewire-pulse, keyring и
 Tracker indexing), но сохраняется минимальный PipeWire display transport,
 который нужен Mutter Devkit для вывода экрана,
-анимации выключены, nested monitor понижается до 2560×1600, а
+анимации выключены, nested monitor понижается до 1920×1200, а
 `MALLOC_ARENA_MAX`/`MALLOC_TRIM_THRESHOLD_` ограничивают fragmentation и
 удержание свободной heap-памяти в долгоживущих glibc-процессах. Это advisory
 profile, а не cgroup memory limit;
 Android по-прежнему управляет reclaim, zram и suspend. Опции можно включить
 точечно переменными `FEDORA_AUDIO_MODE`, `FEDORA_SETTINGS_DAEMON` и
 `FEDORA_LAUNCH_TERMINAL`.
+
+Явный профиль `maximum-linux` дополнительно выбирает Fedora-side nested
+monitor 1600×1000, `MALLOC_ARENA_MAX=1` и более ранний allocator trim. Это
+только компромисс между качеством/плавностью и памятью; Android-панель,
+RAM Plus, zRAM, LMKD и kernel policy не меняются.
 
 ## 8. Backup/recovery
 
@@ -185,8 +259,11 @@ update создаётся архив. `reset.sh` удаляет только Fed
 * [Fedora Workstation 44 / GNOME 50](https://fedoramagazine.org/whats-new-fedora-workstation-44/)
 * [PRoot-Distro](https://github.com/termux/proot-distro)
 * [Termux:X11 README](https://github.com/termux/termux-x11/blob/master/README.md)
-* [GNOME nested Shell testing](https://wiki.gnome.org/Initiatives%282f%29Wayland%282f%29GnomeShell%282f%29Testing.html)
-* [Tess's Android Wayland Compositor research project](https://github.com/wmww/tawc)
+* [GNOME Mutter: building and running](https://github.com/GNOME/mutter/blob/main/doc/building-and-running.md)
+* [GNOME 50 developer notes](https://release.gnome.org/50/developers/index.html)
+* [Android memory management](https://developer.android.com/topic/performance/memory-management)
+* [Android system-wide memory management](https://developer.android.com/topic/performance/memory/guide/system-wide-memory)
 * [Android Surface.setFrameRate](https://developer.android.com/reference/android/view/Surface#setFrameRate(float,%20int,%20int))
 * [Android background activity security](https://developer.android.com/guide/components/activities/secure-bal)
-* [Android Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
+* [Android Storage Access Framework](https://developer.android.com/guide/topics/providers/document-provider)
+* [Samsung RAM Plus](https://www.samsung.com/sg/support/mobile-devices/what-is-ram-plus-and-how-to-use-it/)

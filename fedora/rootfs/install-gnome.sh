@@ -15,6 +15,16 @@ fi
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
+restore_mutter_devkit_helper=/usr/local/libexec/fedora-shell/restore-mutter-devkit
+if [[ -x "$restore_mutter_devkit_helper" && ! -L "$restore_mutter_devkit_helper" ]] \
+  && grep -Fq 'fedora-shell-mutter-devkit-restore-v1' "$restore_mutter_devkit_helper" 2>/dev/null; then
+  "$restore_mutter_devkit_helper"
+elif [[ -f /usr/libexec/mutter-devkit && ! -L /usr/libexec/mutter-devkit ]] \
+  && grep -Fq 'fedora-shell-mutter-devkit-wrapper-v1' /usr/libexec/mutter-devkit 2>/dev/null; then
+  printf '%s\n' 'Mutter Devkit wrapper is active but the trusted package helper is missing; refusing package update.' >&2
+  exit 1
+fi
+
 # A single Fedora mirror can time out while the remaining repositories are
 # usable. Keep the warning visible, but let the refresh/transaction below
 # make the final decision about whether the package operation can proceed.
@@ -108,10 +118,11 @@ This Fedora userspace runs under Android + PRoot-Distro.
 systemd is not PID 1 here. Do not use systemctl as a health check.
 fedora-session starts a private D-Bus session bus, an isolated minimal PipeWire
 display transport and GNOME; WirePlumber/pipewire-pulse are optional helpers
-enabled by the audio profile. The private bus is also exposed as a compatibility
-system-bus address
-because PRoot cannot provide Android/systemd's system bus. This does not
-provide logind, UPower, RTKit or other privileged system services. Desktop
+enabled by the audio profile. PRoot cannot provide Android/systemd's system bus,
+so no system-bus alias is created; logind, UPower, RTKit and other privileged system
+services are intentionally unavailable. On startup fedora-session hides only a
+stale guest /run/systemd/seats marker when systemd is not PID 1, allowing GNOME
+to use its dummy login manager; it restores that guest marker on exit. Desktop
 portals are enabled only when their Android/PRoot FUSE prerequisite is usable.
 EOF
 chmod 0644 /etc/fedora-shell/README

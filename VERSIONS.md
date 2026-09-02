@@ -1,6 +1,6 @@
 # Version policy and provenance
 
-Срез: **2026-08-31**. Версии здесь фиксируют исследованный baseline, а не
+Срез: **2026-09-02**. Версии здесь фиксируют исследованный baseline, а не
 гарантируют, что конкретный mirror будет отдавать тот же mutable tag.
 
 ## Selected baseline
@@ -17,10 +17,11 @@
 | Termux | minimum `v0.118.0`; exact installed version captured by diagnostics | [Termux app](https://github.com/termux/termux-app) |
 | Termux:X11 | current compatible nightly; exact APK/package captured on device | [Termux:X11](https://github.com/termux/termux-x11) |
 | Mesa host package | probe only; do not assume Zink/Mali support | [Termux Mesa build](https://github.com/termux/termux-packages/blob/master/packages/mesa/build.sh) |
-| virglrenderer | probe only; no vendored commit yet | [Termux issue context](https://github.com/termux/termux-packages/issues/19529) |
-| ANGLE | research candidate only | [ANGLE source](https://chromium.googlesource.com/angle/angle/) |
 | Android API | actual `ro.build.version.sdk` required | [Android Surface API](https://developer.android.com/reference/android/view/Surface) |
 | Android controller build | AGP 8.8.2, compile/target SDK 35, min SDK 26 | `android/` prototype; update only with a tested Android toolchain |
+| GNOME nested session | `gnome-shell --wayland --devkit` + official Mutter Devkit viewer | [Mutter building and running](https://github.com/GNOME/mutter/blob/main/doc/building-and-running.md) |
+| Android memory policy | read-only observations; Android remains policy owner | [Android memory management](https://developer.android.com/topic/performance/memory-management) |
+| Samsung RAM Plus | user-controlled OEM setting; not changed by Fedora Shell | [Samsung RAM Plus](https://www.samsung.com/sg/support/mobile-devices/what-is-ram-plus-and-how-to-use-it/) |
 
 ## Rootfs integrity
 

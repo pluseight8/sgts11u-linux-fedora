@@ -13,6 +13,9 @@ FEDORA_NESTED_XWAYLAND="${FEDORA_NESTED_XWAYLAND:-auto}"
 FEDORA_DEVKIT_GDK_BACKEND="${FEDORA_DEVKIT_GDK_BACKEND:-x11}"
 FEDORA_DEVKIT_PIPEWIRE="${FEDORA_DEVKIT_PIPEWIRE:-auto}"
 FEDORA_DEVKIT_PIPEWIRE_CONFIG="${FEDORA_DEVKIT_PIPEWIRE_CONFIG:-/etc/fedora-shell/pipewire-devkit.conf}"
+FEDORA_DEVKIT_DEBUG="${FEDORA_DEVKIT_DEBUG:-0}"
+FEDORA_SYSTEMD_MARKER_MASKED="${FEDORA_SYSTEMD_MARKER_MASKED:-0}"
+FEDORA_LINUX_MODE_STOP_REQUEST="${FEDORA_LINUX_MODE_STOP_REQUEST:-}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
 FEDORA_PORTAL_MODE="${FEDORA_PORTAL_MODE:-auto}"
 FEDORA_CALENDAR_MODE="${FEDORA_CALENDAR_MODE:-auto}"
@@ -22,11 +25,178 @@ FEDORA_SETTINGS_DAEMON="${FEDORA_SETTINGS_DAEMON:-auto}"
 FEDORA_LAUNCH_TERMINAL="${FEDORA_LAUNCH_TERMINAL:-auto}"
 FEDORA_KEYRING_MODE="${FEDORA_KEYRING_MODE:-auto}"
 FEDORA_SEARCH_MODE="${FEDORA_SEARCH_MODE:-auto}"
+FEDORA_ANDROID_APPS_MODE="${FEDORA_ANDROID_APPS_MODE:-auto}"
+FEDORA_ANDROID_APPS_SCOPE="${FEDORA_ANDROID_APPS_SCOPE:-all}"
+FEDORA_KEYBOARD_MODE="${FEDORA_KEYBOARD_MODE:-linux}"
+FEDORA_ANDROID_BRIDGE_DIR="${FEDORA_ANDROID_BRIDGE_DIR:-/tmp/fedora-runtime/android-bridge}"
 
-mkdir -p "$FEDORA_SESSION_RUNTIME" "$(dirname -- "$FEDORA_SESSION_LOG")"
+session_path_parents_safe() {
+  local path="$1"
+  local current="${path%/*}"
+
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$path" in
+    */../*|*/..|*/./*|*/.) return 1 ;;
+  esac
+  [[ -n "$current" ]] || current="/"
+  while [[ "$current" != "/" ]]; do
+    [[ ! -L "$current" && ( ! -e "$current" || -d "$current" ) ]] || return 1
+    current="${current%/*}"
+    [[ -n "$current" ]] || current="/"
+  done
+}
+
+session_runtime_parent="$(dirname -- "$FEDORA_SESSION_RUNTIME")"
+session_log_parent="$(dirname -- "$FEDORA_SESSION_LOG")"
+if ! session_path_parents_safe "$FEDORA_SESSION_RUNTIME" \
+  || ! session_path_parents_safe "$FEDORA_SESSION_LOG" \
+  || [[ -L "$FEDORA_SESSION_RUNTIME" \
+  || ( -e "$FEDORA_SESSION_RUNTIME" && ! -d "$FEDORA_SESSION_RUNTIME" ) \
+  || -L "$session_runtime_parent" \
+  || ( -e "$session_runtime_parent" && ! -d "$session_runtime_parent" ) ]]; then
+  printf '[fedora-session] ERROR: unsafe Fedora runtime path: %s\n' "$FEDORA_SESSION_RUNTIME" >&2
+  exit 1
+fi
+if [[ -L "$session_log_parent" \
+  || ( -e "$session_log_parent" && ! -d "$session_log_parent" ) ]]; then
+  printf '[fedora-session] ERROR: unsafe Fedora log directory: %s\n' "$session_log_parent" >&2
+  exit 1
+fi
+mkdir -p "$FEDORA_SESSION_RUNTIME" "$session_log_parent"
+[[ -d "$FEDORA_SESSION_RUNTIME" && ! -L "$FEDORA_SESSION_RUNTIME" ]] || {
+  printf '[fedora-session] ERROR: Fedora runtime directory is unavailable: %s\n' "$FEDORA_SESSION_RUNTIME" >&2
+  exit 1
+}
+[[ -d "$session_log_parent" && ! -L "$session_log_parent" ]] || {
+  printf '[fedora-session] ERROR: Fedora log directory is unavailable: %s\n' "$session_log_parent" >&2
+  exit 1
+}
+if [[ -L "$FEDORA_SESSION_LOG" \
+  || ( -e "$FEDORA_SESSION_LOG" && ! -f "$FEDORA_SESSION_LOG" ) ]]; then
+  printf '[fedora-session] ERROR: unsafe Fedora session log path: %s\n' "$FEDORA_SESSION_LOG" >&2
+  exit 1
+fi
 chmod 700 "$FEDORA_SESSION_RUNTIME" 2>/dev/null || true
 touch "$FEDORA_SESSION_LOG"
+: > "$FEDORA_SESSION_LOG"
 
+# Fedora packages may leave the logind discovery marker behind even though a
+# PRoot guest has no systemd PID 1. GNOME Shell uses this marker (rather than
+# checking PID 1) to decide whether to instantiate its systemd LoginManager.
+# If the marker is stale, Shell then asks the private session bus for
+# org.freedesktop.login1 and can abort during TimeLimitsManager startup. Hide
+# only this exact marker for the lifetime of this session; never alter Android
+# /run or a real systemd installation.
+systemd_marker_hidden="${FEDORA_SYSTEMD_MARKER_HIDDEN:-0}"
+systemd_marker_backup="$FEDORA_SESSION_RUNTIME/systemd-seats-marker"
+local_settings_backup="$FEDORA_SESSION_RUNTIME/fedora-local-settings.backup"
+systemd_pid1_active() {
+  [[ -r /proc/1/comm ]] || return 1
+  [[ "$(< /proc/1/comm)" == systemd ]]
+}
+
+# `kill -0` also succeeds for a zombie until its parent reaps it. Treating a
+# dead viewer or compositor as alive can publish a false-ready session and
+# leave the user with a black surface. Keep this check local to Fedora/PRoot
+# processes; it never inspects or controls Android services.
+process_is_live() {
+  local pid="$1"
+  local state=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/$pid/stat" ]]; then
+    state="$(sed -n 's/^[^)]*) \([A-Z]\) .*/\1/p' "/proc/$pid/stat" 2>/dev/null || true)"
+    [[ -z "$state" || "$state" != Z ]] || return 1
+  fi
+  return 0
+}
+
+hide_stale_systemd_marker() {
+  if [[ "$FEDORA_SYSTEMD_MARKER_MASKED" == 1 ]]; then
+    session_log "Using the PRoot-only renamed backup for stale /run/systemd/seats"
+    return 0
+  fi
+  local marker=/run/systemd/seats
+  systemd_pid1_active && return 0
+  if [[ -L "$marker" || -L "$systemd_marker_backup" ]]; then
+    session_log "Refusing to move a symlinked Fedora-only systemd marker path"
+    return 1
+  fi
+  if [[ -e "$systemd_marker_backup" && ! -e "$marker" ]]; then
+    # The previous supervisor may have been interrupted before its EXIT trap
+    # ran. Keep the exact guest marker hidden and let this invocation restore it
+    # on a normal exit; never leave a stale backup permanently orphaned.
+    systemd_marker_hidden=1
+    export FEDORA_SYSTEMD_MARKER_HIDDEN=1
+    session_log "Reusing the PRoot-only hidden systemd marker from an interrupted session"
+    return 0
+  fi
+  [[ -e "$marker" ]] || return 0
+  [[ ! -e "$systemd_marker_backup" ]] || return 0
+  if mv -- "$marker" "$systemd_marker_backup" 2>/dev/null; then
+    systemd_marker_hidden=1
+    export FEDORA_SYSTEMD_MARKER_HIDDEN=1
+    session_log "No systemd PID 1 in PRoot; hiding stale $marker so GNOME uses its dummy login manager"
+  else
+    session_log "Could not hide stale $marker; GNOME system-service probes may be unavailable"
+  fi
+}
+
+wait_for_devkit_session() {
+  local shell_pid="$1"
+  local viewer_pid="$2"
+  local shell_rc=0
+  devkit_session_reason=shell
+  devkit_shell_rc=0
+
+  while :; do
+    if linux_mode_stop_requested; then
+      devkit_session_reason=stop
+      session_log "Linux Mode stop requested; ending the Fedora Devkit session cleanly"
+      kill "$shell_pid" 2>/dev/null || true
+      kill "$viewer_pid" 2>/dev/null || true
+      wait "$shell_pid" 2>/dev/null || true
+      wait "$viewer_pid" 2>/dev/null || true
+      return 0
+    fi
+    if ! process_is_live "$shell_pid"; then
+      wait "$shell_pid" 2>/dev/null || shell_rc=$?
+      devkit_shell_rc="$shell_rc"
+      if process_is_live "$viewer_pid"; then
+        kill "$viewer_pid" 2>/dev/null || true
+        wait "$viewer_pid" 2>/dev/null || true
+      fi
+      (( shell_rc == 0 )) && return 0
+      return 125
+    fi
+    if ! process_is_live "$viewer_pid"; then
+      devkit_session_reason=viewer
+      session_log "Mutter Devkit viewer exited while GNOME Shell was still running; stopping the matching Fedora Shell process"
+      kill "$shell_pid" 2>/dev/null || true
+      wait "$shell_pid" 2>/dev/null || shell_rc=$?
+      devkit_shell_rc="$shell_rc"
+      return 125
+    fi
+    sleep 0.5
+  done
+}
+
+restore_stale_systemd_marker() {
+  local marker=/run/systemd/seats
+  (( systemd_marker_hidden )) || return 0
+  if [[ -L "$marker" || -L "$systemd_marker_backup" ]]; then
+    session_log "Refusing to restore a symlinked Fedora-only systemd marker path"
+    return 0
+  fi
+  [[ -e "$systemd_marker_backup" ]] || return 0
+  # Do not overwrite a marker created by a real service while this session ran.
+  if [[ ! -e "$marker" ]]; then
+    mv -- "$systemd_marker_backup" "$marker" 2>/dev/null || true
+  fi
+}
 # A crashed compositor can leave its endpoint behind. This runtime directory
 # is project-owned, and start.sh has already checked that no Fedora session is
 # running, so removing only Wayland endpoints is safe and prevents a stale
@@ -46,9 +216,44 @@ session_log() {
   printf '[fedora-session] %s\n' "$*" | tee -a "$FEDORA_SESSION_LOG" >&2
 }
 
+linux_mode_stop_requested() {
+  [[ -n "$FEDORA_LINUX_MODE_STOP_REQUEST" ]] \
+    && [[ -f "$FEDORA_LINUX_MODE_STOP_REQUEST" \
+    && ! -L "$FEDORA_LINUX_MODE_STOP_REQUEST" ]]
+}
+
 session_die() {
   session_log "ERROR: $*"
   exit 1
+}
+
+atomic_session_write() {
+  local destination="$1"
+  local mode="${2:-600}"
+  local parent temporary
+
+  session_path_parents_safe "$destination" || return 1
+  if [[ -L "$destination" || ( -e "$destination" && ! -f "$destination" ) ]]; then
+    session_log "ERROR: refusing unsafe Fedora session file: $destination"
+    return 1
+  fi
+  parent="${destination%/*}"
+  [[ -n "$parent" ]] || parent="/"
+  [[ -d "$parent" && ! -L "$parent" ]] || return 1
+  temporary="$(mktemp "$parent/.fedora-session-write.XXXXXX")" || return 1
+  if ! cat > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  chmod "$mode" "$temporary" 2>/dev/null || true
+  [[ ! -L "$destination" ]] || {
+    rm -f -- "$temporary"
+    session_log "ERROR: Fedora session file became a symlink: $destination"
+    return 1
+  }
+  mv -f -- "$temporary" "$destination"
+  [[ -f "$destination" && ! -L "$destination" ]] || return 1
+  chmod "$mode" "$destination" 2>/dev/null || true
 }
 
 configure_memory_profile() {
@@ -65,26 +270,105 @@ configure_memory_profile() {
   # monitor used by nested Mutter, reducing compositor/Xwayland buffers while
   # keeping the panel's aspect ratio. An explicit mode spec always wins.
   if [[ -z "${FEDORA_NESTED_MODE_SPECS:-}" ]]; then
-    FEDORA_NESTED_MODE_SPECS=2048x1280
+    FEDORA_NESTED_MODE_SPECS=1920x1200
     export FEDORA_NESTED_MODE_SPECS
-    session_log "Low-memory profile uses a 2048x1280 virtual monitor; set FEDORA_NESTED_MODE_SPECS to override"
+    session_log "Low-memory profile uses a 1920x1200 virtual monitor; set FEDORA_NESTED_MODE_SPECS to override"
   fi
 }
+
+configure_keyboard_mode() {
+  # Never trust a host-supplied XKB path; only the canonical Fedora catalog
+  # may be exposed to the Linux session.
+  unset XKB_CONFIG_ROOT || true
+  case "$FEDORA_KEYBOARD_MODE" in
+    linux|focused|auto)
+      export FEDORA_KEYBOARD_MODE
+      # XKB_CONFIG_ROOT is a Fedora guest path only. Set the canonical path
+      # when it exists, without accepting a caller-supplied symlink or path.
+      if [[ -d /usr/share/X11/xkb && ! -L /usr/share/X11/xkb ]]; then
+        export XKB_CONFIG_ROOT=/usr/share/X11/xkb
+        session_log "Linux keyboard focus mode enabled: ordinary keys follow the focused Termux:X11/Fedora surface; XKB_CONFIG_ROOT=$XKB_CONFIG_ROOT"
+      else
+        session_log "Linux keyboard focus mode enabled: ordinary keys follow the focused Termux:X11/Fedora surface; guest XKB catalog unavailable"
+      fi
+      ;;
+    *)
+      session_log "Unknown FEDORA_KEYBOARD_MODE=$FEDORA_KEYBOARD_MODE; using Linux focused-input mode"
+      FEDORA_KEYBOARD_MODE=linux
+      export FEDORA_KEYBOARD_MODE
+      ;;
+  esac
+}
+configure_keyboard_mode
 configure_memory_profile
+
+backup_fedora_settings() {
+  command -v gsettings >/dev/null 2>&1 || return 0
+  if [[ -e "$local_settings_backup" ]]; then
+    [[ -f "$local_settings_backup" && ! -L "$local_settings_backup" ]] || \
+      session_die "Fedora-local settings backup is unsafe: $local_settings_backup"
+    return 0
+  fi
+
+  local temporary schema key value setting saved=0
+  temporary="$(mktemp "$FEDORA_SESSION_RUNTIME/.fedora-settings.XXXXXX")" || \
+    session_die "Could not create Fedora-local settings backup"
+  chmod 600 "$temporary" 2>/dev/null || true
+  for setting in \
+    'org.freedesktop.Tracker3.Miner.Files|enable-monitors' \
+    'org.freedesktop.Tracker3.Miner.Files|crawling-interval' \
+    'org.gnome.desktop.search-providers|disable-external' \
+    'org.gnome.desktop.screen-time-limits|history-enabled' \
+    'org.gnome.desktop.screen-time-limits|daily-limit-enabled'; do
+    schema="${setting%%|*}"
+    key="${setting#*|}"
+    value="$(gsettings get "$schema" "$key" 2>/dev/null || true)"
+    [[ -n "$value" ]] || continue
+    printf '%s|%s|%s\n' "$schema" "$key" "$value" >> "$temporary"
+    saved=$((saved + 1))
+  done
+  if (( saved > 0 )); then
+    [[ ! -L "$local_settings_backup" ]] || {
+      rm -f -- "$temporary"
+      session_die "Fedora-local settings backup became a symlink"
+    }
+    mv -f -- "$temporary" "$local_settings_backup"
+    chmod 600 "$local_settings_backup" 2>/dev/null || true
+    session_log "Saved $saved Fedora-local dconf values for reversible session tuning"
+  else
+    rm -f -- "$temporary"
+  fi
+}
+
+restore_fedora_settings() {
+  if [[ -L "$local_settings_backup" \
+    || ( -e "$local_settings_backup" && ! -f "$local_settings_backup" ) ]]; then
+    session_log "ERROR: refusing unsafe Fedora-local settings backup: $local_settings_backup"
+    return 0
+  fi
+  [[ -r "$local_settings_backup" ]] || return 0
+  command -v gsettings >/dev/null 2>&1 || return 0
+
+  local schema key value restored=1
+  while IFS='|' read -r schema key value; do
+    [[ -n "$schema" && -n "$key" && -n "$value" ]] || continue
+    if ! gsettings set "$schema" "$key" "$value" \
+      >> "$FEDORA_SESSION_LOG" 2>&1; then
+      restored=0
+    fi
+  done < "$local_settings_backup"
+  if (( restored )); then
+    rm -f -- "$local_settings_backup"
+    session_log "Restored Fedora-local dconf values; Android settings were not touched"
+  else
+    session_log "Could not restore every Fedora-local dconf value; backup retained for the next session"
+  fi
+}
 
 portal_fuse_available() {
   [[ -c /dev/fuse ]] || return 1
   # Android may expose the device node while SELinux still denies opening it.
   (exec 3<>/dev/fuse) 2>/dev/null
-}
-
-portal_mode_disables_autostart() {
-  case "$FEDORA_PORTAL_MODE" in
-    off|disabled|none) return 0 ;;
-    auto) ! portal_fuse_available ;;
-    on|enabled) return 1 ;;
-    *) return 0 ;;
-  esac
 }
 
 calendar_services_disabled() {
@@ -96,80 +380,206 @@ calendar_services_disabled() {
   esac
 }
 
+portals_disabled_for_bus() {
+  case "$FEDORA_PORTAL_MODE" in
+    off|disabled|none|0|false|no) return 0 ;;
+    on|enabled|1|true|yes) return 1 ;;
+    auto) ! portal_fuse_available ;;
+    *) return 0 ;;
+  esac
+}
+
 session_bus_overrides_needed() {
-  portal_mode_disables_autostart || calendar_services_disabled
+  # Portal suppression is client-side plus a filtered activation catalog. Do
+  # not register fake portal services: Mutter/GNOME legitimately probe portal
+  # APIs and a /usr/bin/false service changes a harmless ServiceUnknown into
+  # repeated activation failures. The filtered catalog is needed because the
+  # stock D-Bus catalog can autostart xdg-desktop-portal even when GTK clients
+  # were told not to use it.
+  portals_disabled_for_bus || calendar_services_disabled
+}
+
+service_is_suppressed() {
+  local service_file="$1"
+  local service_name=""
+  local service_basename="${service_file##*/}"
+
+  # A service file's declared Name is authoritative, but the well-known
+  # portal filenames are also a useful fail-closed guard. Some vendor files
+  # have historically omitted/varied the key formatting while still naming
+  # the portal service unambiguously. Never let a disabled portal return to
+  # the private bus because a parser missed one spelling variant.
+  case "$service_basename" in
+    org.freedesktop.portal.*.service|org.freedesktop.impl.portal.*.service)
+      portals_disabled_for_bus
+      return
+      ;;
+    org.gnome.Shell.CalendarServer.service|org.gnome.OnlineAccounts.service|\
+    org.gnome.Identity.service|org.gnome.evolution.dataserver.Sources5.service|\
+    org.gnome.evolution.dataserver.Calendar8.service|\
+    org.gnome.evolution.dataserver.AddressBook10.service)
+      calendar_services_disabled
+      return
+      ;;
+  esac
+
+  # Fedora service files are not required to use the exact `Name=` spelling:
+  # whitespace around the key/equal sign is legal. A strict match silently
+  # reintroduced the very optional services this filter was meant to omit.
+  service_name="$(sed -nE 's/^[[:space:]]*Name[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' \
+    "$service_file" 2>/dev/null | sed -n '1p' || true)"
+  if [[ -z "$service_name" ]]; then
+    service_name="${service_file##*/}"
+    service_name="${service_name%.service}"
+  fi
+  case "$service_name" in
+    org.freedesktop.portal.*|org.freedesktop.impl.portal.*)
+      portals_disabled_for_bus
+      return
+      ;;
+    org.gnome.Shell.CalendarServer|org.gnome.OnlineAccounts|org.gnome.Identity|\
+    org.gnome.evolution.dataserver.Sources5|org.gnome.evolution.dataserver.Calendar8|\
+    org.gnome.evolution.dataserver.AddressBook10)
+      calendar_services_disabled
+      return
+      ;;
+  esac
+  return 1
+}
+
+build_filtered_dbus_service_dir() {
+  local service_dir="$1"
+  local service_file service_basename data_dir
+  local copied=0 suppressed=0
+  local -a suppressed_names=()
+  local -a standard_service_dirs=()
+  local -a data_dirs=()
+
+  if ! session_path_parents_safe "$service_dir" \
+    || [[ "$service_dir" != "$FEDORA_SESSION_RUNTIME/dbus-services" ]]; then
+    session_log "Refusing an unexpected private D-Bus service directory: $service_dir"
+    return 1
+  fi
+  if [[ -L "$service_dir" \
+    || ( -e "$service_dir" && ! -d "$service_dir" ) ]]; then
+    session_log "Refusing an unsafe private D-Bus service directory: $service_dir"
+    return 1
+  fi
+  if [[ -d "$service_dir" ]]; then
+    # This directory is generated by this supervisor. Remove only its direct
+    # regular-file/symlink entries; preserve unknown directories and special
+    # files by failing closed instead of recursively deleting user data.
+    while IFS= read -r -d '' service_file; do
+      if [[ ! -f "$service_file" && ! -L "$service_file" ]]; then
+        session_log "Refusing unexpected entry in private D-Bus service directory: $service_file"
+        return 1
+      fi
+      rm -f -- "$service_file"
+    done < <(find "$service_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+  else
+    mkdir -p "$service_dir"
+  fi
+  [[ -d "$service_dir" && ! -L "$service_dir" ]] || {
+    session_log "Private D-Bus service directory became unavailable: $service_dir"
+    return 1
+  }
+
+  # Mirror the standard session-service search locations into a project-owned
+  # directory, omitting only services that are unavailable or intentionally
+  # disabled in this Fedora/PRoot session. Symlinks keep the runtime small and
+  # leave the package-owned service files untouched.
+  standard_service_dirs+=("$FEDORA_SESSION_RUNTIME/dbus-1/services")
+  if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+    data_dirs+=("$XDG_DATA_HOME")
+  else
+    data_dirs+=("${HOME:-/root}/.local/share")
+  fi
+  IFS=: read -r -a xdg_data_dirs <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+  data_dirs+=("${xdg_data_dirs[@]}")
+  data_dirs+=(/usr/share)
+
+  for data_dir in "${data_dirs[@]}"; do
+    [[ -n "$data_dir" ]] || continue
+    standard_service_dirs+=("$data_dir/dbus-1/services")
+  done
+
+  for data_dir in "${standard_service_dirs[@]}"; do
+    [[ -d "$data_dir" ]] || continue
+    while IFS= read -r -d '' service_file; do
+      service_basename="${service_file##*/}"
+      if service_is_suppressed "$service_file"; then
+        suppressed=$((suppressed + 1))
+        suppressed_names+=("$service_basename")
+        continue
+      fi
+      [[ -e "$service_dir/$service_basename" ]] && continue
+      ln -s -- "$service_file" "$service_dir/$service_basename" 2>/dev/null \
+        || cp -L -- "$service_file" "$service_dir/$service_basename"
+      copied=$((copied + 1))
+    done < <(find "$data_dir" -maxdepth 1 -type f -name '*.service' -print0 2>/dev/null || true)
+  done
+
+  # Re-check the copied catalog by its declared bus name as well as by its
+  # filename. This protects against vendor service files whose filename does
+  # not match the well-known name and keeps the generated directory truly
+  # fail-closed when portals/calendar helpers are disabled.
+  for service_file in "$service_dir"/*.service; do
+    [[ -e "$service_file" ]] || continue
+    if service_is_suppressed "$service_file"; then
+      service_basename="${service_file##*/}"
+      rm -f -- "$service_file"
+      suppressed=$((suppressed + 1))
+      suppressed_names+=("$service_basename")
+    fi
+  done
+
+  if (( suppressed > 0 )); then
+    session_log "Private D-Bus catalog: suppressed $suppressed optional service entries; copied $copied entries (${suppressed_names[*]})"
+  else
+    session_log "Private D-Bus catalog: no optional service entries matched; copied $copied entries"
+  fi
 }
 
 make_no_portal_dbus_config() {
   local config_path="$FEDORA_SESSION_RUNTIME/dbus-session-no-portals.conf"
   local service_dir="$FEDORA_SESSION_RUNTIME/dbus-services"
-  [[ -r /usr/share/dbus-1/session.conf ]] || return 1
+  local escaped_service_dir
 
-  # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection, but
-  # GNOME Shell and Mutter Devkit can still request portal names directly. Put
-  # cheap project-owned failing service stubs before the standard service
-  # directories. The low profile also suppresses calendar/online-account
-  # activation, which otherwise starts Evolution Data Server and GOA even
-  # though a PRoot guest has no useful system services for them. Do not add a
-  # broad D-Bus deny policy: it turns optional lookups into AccessDenied and
-  # makes Mutter/GDK noisier than a normal activation failure.
-  mkdir -p "$service_dir"
-  local service_name
-  for service_name in \
-    org.freedesktop.portal.Desktop \
-    org.freedesktop.portal.Documents \
-    org.freedesktop.impl.portal.PermissionStore \
-    org.freedesktop.impl.portal.desktop.gnome \
-    org.freedesktop.impl.portal.desktop.gtk \
-    org.gnome.Shell.CalendarServer \
-    org.gnome.OnlineAccounts \
-    org.gnome.Identity \
-    org.gnome.evolution.dataserver.Sources5 \
-    org.gnome.evolution.dataserver.Calendar8 \
-    org.gnome.evolution.dataserver.AddressBook10; do
-    rm -f -- "$service_dir/$service_name.service"
-  done
-  local -a service_names=()
-  if portal_mode_disables_autostart; then
-    service_names+=(
-      org.freedesktop.portal.Desktop
-      org.freedesktop.portal.Documents
-      org.freedesktop.impl.portal.PermissionStore
-      org.freedesktop.impl.portal.desktop.gnome
-      org.freedesktop.impl.portal.desktop.gtk
-    )
-  fi
-  if calendar_services_disabled; then
-    service_names+=(
-      org.gnome.Shell.CalendarServer
-      org.gnome.OnlineAccounts
-      org.gnome.Identity
-      org.gnome.evolution.dataserver.Sources5
-      org.gnome.evolution.dataserver.Calendar8
-      org.gnome.evolution.dataserver.AddressBook10
-    )
-  fi
-  ((${#service_names[@]} > 0)) || return 1
-  for service_name in "${service_names[@]}"; do
-    {
-      printf '[D-BUS Service]\n'
-      printf 'Name=%s\n' "$service_name"
-      printf 'Exec=/usr/bin/false\n'
-    } > "$service_dir/$service_name.service"
-  done
+  # GTK_USE_PORTAL/GIO_USE_VFS stop normal client-side portal selection. The
+  # filtered catalog additionally keeps portal and low-memory helper names out
+  # of the private bus, so optional probes return ServiceUnknown and do not
+  # launch xdg-desktop-portal, Evolution or GOA. Do not include Fedora's
+  # package-owned session.conf here: its nested /etc includes can re-add the
+  # standard service directories after this function has filtered them.
+  # Do not add a broad D-Bus deny policy: it turns optional lookups into
+  # AccessDenied and makes Mutter/GDK noisier than a normal missing service.
+  # The generated config intentionally replaces the stock
+  # <standard_session_servicedirs /> expansion with one filtered directory.
+  build_filtered_dbus_service_dir "$service_dir"
   chmod 700 "$service_dir" 2>/dev/null || true
-  chmod 600 "$service_dir"/*.service 2>/dev/null || true
 
-  awk -v service_dir="$service_dir" '
-    /<busconfig>/ && !service_dir_added {
-      print
-      printf "  <servicedir>%s</servicedir>\n", service_dir
-      service_dir_added=1
-      next
-    }
-    { print }
-  ' /usr/share/dbus-1/session.conf > "$config_path"
-  chmod 600 "$config_path" 2>/dev/null || true
+  escaped_service_dir="$(printf '%s' "$service_dir" \
+    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  if ! atomic_session_write "$config_path" 600 <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <servicedir>$escaped_service_dir</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+  then
+    rm -f -- "$config_path"
+    return 1
+  fi
   printf '%s\n' "$config_path"
 }
 
@@ -182,23 +592,33 @@ if [[ "${1:-}" != --inside-dbus ]]; then
   if session_bus_overrides_needed; then
     if dbus_config_path="$(make_no_portal_dbus_config || true)" && [[ -n "$dbus_config_path" ]]; then
       dbus_args+=("--config-file=$dbus_config_path")
+      session_log "Using filtered private D-Bus activation catalog: $dbus_config_path"
     else
       session_log "Could not build the optional-service D-Bus overrides; client-side guards remain active"
     fi
   fi
+  if portals_disabled_for_bus; then
+    # Set client-side guards before any D-Bus-activated GNOME helper can run.
+    # The later start_desktop_portals() call repeats these assignments for the
+    # normal in-session path; doing it here also covers early Shell probes.
+    export GTK_USE_PORTAL="${GTK_USE_PORTAL:-0}"
+    export GIO_USE_VFS="${GIO_USE_VFS:-local}"
+    export ADW_DISABLE_PORTAL="${ADW_DISABLE_PORTAL:-1}"
+  fi
   exec dbus-run-session "${dbus_args[@]}" -- "$0" --inside-dbus "$@"
 fi
 shift
-: > "$FEDORA_SESSION_LOG"
 
-# GNOME 50+ creates a Gio.DBus.system proxy during Shell startup. A PRoot
-# guest has no Android/systemd system bus, but it does have the private bus
-# created above. Reuse that bus as a compatibility address unless the caller
-# supplied a real system bus explicitly. This provides a D-Bus endpoint for
-# user-session startup without pretending that logind, UPower or RTKit exist.
-if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" && -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-  export DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
-  session_log "No system D-Bus is available; using the private session bus as a GNOME compatibility endpoint"
+# Do not alias the private session bus to DBus.system. They have different
+# security contracts; aliasing makes GNOME treat optional session services as
+# logind/PolicyKit and produces AccessDenied/ServiceUnknown cascades. With the
+# stale systemd marker hidden above, GNOME selects its built-in dummy login
+# manager and optional system-bus calls fail harmlessly.
+if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
+  session_log "Using caller-provided system D-Bus address"
+else
+  unset DBUS_SYSTEM_BUS_ADDRESS
+  session_log "No system D-Bus is available; GNOME system-service integration is disabled in PRoot"
 fi
 
 export DISPLAY="$FEDORA_DISPLAY"
@@ -222,6 +642,60 @@ export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
 export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
 export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-auto}"
+
+case "$FEDORA_DEVKIT_DEBUG" in
+  1|true|TRUE|yes|YES|on|ON)
+    export PIPEWIRE_DEBUG="${PIPEWIRE_DEBUG:-3}"
+    export G_MESSAGES_DEBUG="${G_MESSAGES_DEBUG:-all}"
+    session_log "Devkit debug logging enabled (PIPEWIRE_DEBUG=$PIPEWIRE_DEBUG, G_MESSAGES_DEBUG=$G_MESSAGES_DEBUG)"
+    ;;
+  0|false|FALSE|no|NO|off|OFF|'')
+    ;;
+  *)
+    session_log "Unknown FEDORA_DEVKIT_DEBUG=$FEDORA_DEVKIT_DEBUG; debug logging remains disabled"
+    ;;
+esac
+
+update_dbus_activation_environment() {
+  command -v dbus-update-activation-environment >/dev/null 2>&1 || {
+    session_log "dbus-update-activation-environment is unavailable; Devkit viewer may inherit the parent GTK backend"
+    return 0
+  }
+  local activation_backend activation_wayland
+  if (( $# >= 1 )); then
+    activation_backend="$1"
+  else
+    activation_backend="${GDK_BACKEND:-}"
+  fi
+  if (( $# >= 2 )); then
+    activation_wayland="$2"
+  else
+    activation_wayland="${WAYLAND_DISPLAY:-}"
+  fi
+  local -a environment=(
+    "DISPLAY=$DISPLAY"
+    "GDK_BACKEND=$activation_backend"
+    "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+    "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-GNOME}"
+    "XDG_SESSION_DESKTOP=${XDG_SESSION_DESKTOP:-gnome}"
+    "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}"
+    "PIPEWIRE_RUNTIME_DIR=$PIPEWIRE_RUNTIME_DIR"
+    "PIPEWIRE_REMOTE=$PIPEWIRE_REMOTE"
+    "PIPEWIRE_CORE=$PIPEWIRE_CORE"
+    "FEDORA_KEYBOARD_MODE=$FEDORA_KEYBOARD_MODE"
+    "XKB_CONFIG_ROOT=${XKB_CONFIG_ROOT:-}"
+  )
+  # dbus-update-activation-environment cannot unset a variable once it has
+  # entered the daemon's environment. An empty value is the portable way to
+  # prevent a D-Bus-activated X11 viewer from selecting a stale Wayland socket;
+  # the direct GNOME Shell process was already given a genuinely unset value
+  # above.
+  environment+=("WAYLAND_DISPLAY=$activation_wayland")
+  if ! dbus-update-activation-environment "${environment[@]}" \
+    >> "$FEDORA_SESSION_LOG" 2>&1; then
+    session_log "Could not update the private D-Bus activation environment for the Devkit viewer"
+  fi
+}
 
 session_option_enabled() {
   local requested="$1"
@@ -257,6 +731,7 @@ configure_search_mode() {
   fi
   case "$mode" in
     off|disabled|none)
+      backup_fedora_settings
       session_log "GNOME search indexing disabled for memory profile $FEDORA_MEMORY_PROFILE"
       if command -v gsettings >/dev/null 2>&1; then
         gsettings set org.freedesktop.Tracker3.Miner.Files enable-monitors false \
@@ -271,6 +746,7 @@ configure_search_mode() {
       fi
       ;;
     on|enabled)
+      backup_fedora_settings
       session_log "GNOME search indexing explicitly enabled"
       if command -v gsettings >/dev/null 2>&1; then
         gsettings set org.freedesktop.Tracker3.Miner.Files enable-monitors true \
@@ -285,8 +761,75 @@ configure_search_mode() {
   esac
 }
 
-session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE calendar=$FEDORA_CALENDAR_MODE xwayland=$FEDORA_NESTED_XWAYLAND"
-configure_search_mode
+disable_unsupported_system_integrations() {
+  # GNOME 50 creates TimeLimitsManager during Shell startup. If the Fedora
+  # guest has the screen-time history key enabled, that manager asks for a
+  # systemd/logind user proxy and can tear down an otherwise healthy nested
+  # session when PRoot has no system D-Bus. This is a Fedora-local setting;
+  # Android Digital Wellbeing and Android parental controls are not touched.
+  if command -v gsettings >/dev/null 2>&1; then
+    backup_fedora_settings
+    if gsettings set org.gnome.desktop.screen-time-limits history-enabled false \
+      >> "$FEDORA_SESSION_LOG" 2>&1; then
+      session_log "GNOME screen-time history disabled: logind is unavailable in Fedora/PRoot"
+    fi
+    if gsettings set org.gnome.desktop.screen-time-limits daily-limit-enabled false \
+      >> "$FEDORA_SESSION_LOG" 2>&1; then
+      session_log "GNOME daily screen-time limit disabled: logind is unavailable in Fedora/PRoot"
+    fi
+  fi
+}
+
+sync_android_app_desktops() {
+  case "$FEDORA_ANDROID_APPS_SCOPE" in
+    user|all) ;;
+    *)
+      session_log "Unknown FEDORA_ANDROID_APPS_SCOPE=$FEDORA_ANDROID_APPS_SCOPE; using user scope"
+      FEDORA_ANDROID_APPS_SCOPE=user
+      ;;
+  esac
+  case "$FEDORA_ANDROID_APPS_MODE" in
+    off|disabled|none|0|false|no)
+      session_log "Android application entries disabled (FEDORA_ANDROID_APPS_MODE=$FEDORA_ANDROID_APPS_MODE)"
+      return 0
+      ;;
+    on|enabled|1|true|yes|auto)
+      ;;
+    *)
+      session_log "Unknown FEDORA_ANDROID_APPS_MODE=$FEDORA_ANDROID_APPS_MODE; keeping existing Android entries"
+      return 0
+      ;;
+  esac
+  if [[ ! -x /usr/local/bin/fedora-android-bridge \
+    || -L /usr/local/bin/fedora-android-bridge ]]; then
+    session_log "Android application bridge is not installed; keeping existing Android entries"
+    return 0
+  fi
+  if [[ ! -d "$FEDORA_ANDROID_BRIDGE_DIR" \
+    || -L "$FEDORA_ANDROID_BRIDGE_DIR" \
+    || ! -d "$FEDORA_ANDROID_BRIDGE_DIR/requests" \
+    || -L "$FEDORA_ANDROID_BRIDGE_DIR/requests" \
+    || ! -d "$FEDORA_ANDROID_BRIDGE_DIR/responses" \
+    || -L "$FEDORA_ANDROID_BRIDGE_DIR/responses" ]]; then
+    session_log "Android application broker is unavailable; keeping existing Android entries"
+    return 0
+  fi
+
+  local output="" rc=0
+  # Startup enumeration is intentionally shorter than an explicit user
+  # command: a missing/stopped Termux broker must never delay GNOME for the
+  # full interactive timeout. A failed refresh leaves the previous catalog in
+  # place; it never deletes Android or Fedora applications.
+  if output="$(FEDORA_ANDROID_BRIDGE_TIMEOUT="${FEDORA_ANDROID_BRIDGE_TIMEOUT:-3}" \
+    FEDORA_ANDROID_APPS_SCOPE="$FEDORA_ANDROID_APPS_SCOPE" \
+    /usr/local/bin/fedora-android-bridge sync-apps 2>&1)"; then
+    [[ -z "$output" ]] || session_log "$output"
+  else
+    rc=$?
+    session_log "Android application catalog refresh failed (exit $rc); existing entries were preserved"
+    [[ -z "$output" ]] || session_log "$output"
+  fi
+}
 
 child_pids=()
 pipewire_pid=""
@@ -297,17 +840,20 @@ pipewire_process_alive() {
   local pid="$1"
   local process_name=""
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  if [[ -r "/proc/$pid/comm" ]]; then
-    process_name="$(<"/proc/$pid/comm")"
-    [[ "$process_name" == pipewire ]] || return 1
-  fi
-  return 0
+  process_is_live "$pid" || return 1
+  [[ -r "/proc/$pid/comm" ]] || return 1
+  process_name="$(<"/proc/$pid/comm")"
+  [[ "$process_name" == pipewire ]]
 }
 
 remove_stale_pipewire_state() {
   local old_pid=""
   local tries=0
+  if [[ -L "$pipewire_pid_file" \
+    || ( -e "$pipewire_pid_file" && ! -f "$pipewire_pid_file" ) ]]; then
+    session_log "ERROR: refusing unsafe project PipeWire PID file: $pipewire_pid_file"
+    return 1
+  fi
   if [[ -r "$pipewire_pid_file" ]]; then
     old_pid="$(sed -n '1p' "$pipewire_pid_file" 2>/dev/null || true)"
     if pipewire_process_alive "$old_pid"; then
@@ -351,14 +897,14 @@ stop_pipewire_process() {
 cleanup() {
   local pid tries
   for pid in "${child_pids[@]:-}"; do
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    if [[ "$pid" =~ ^[0-9]+$ ]] && process_is_live "$pid"; then
       kill "$pid" 2>/dev/null || true
       tries=0
-      while kill -0 "$pid" 2>/dev/null && (( tries < 20 )); do
+      while process_is_live "$pid" && (( tries < 20 )); do
         sleep 0.1
         ((tries += 1))
       done
-      if kill -0 "$pid" 2>/dev/null; then
+      if process_is_live "$pid"; then
         kill -KILL "$pid" 2>/dev/null || true
       fi
       wait "$pid" 2>/dev/null || true
@@ -370,8 +916,21 @@ cleanup() {
     "$FEDORA_SESSION_RUNTIME/pipewire-0.lock" \
     "$FEDORA_SESSION_RUNTIME/pipewire-0-manager" \
     "$FEDORA_SESSION_RUNTIME/pipewire-0-manager.lock"
+  restore_fedora_settings
+  restore_stale_systemd_marker
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Install the cleanup trap before hiding the Fedora-only systemd marker or
+# changing Fedora-local dconf values. A failure in optional setup must never
+# leave those reversible guest-only changes behind.
+hide_stale_systemd_marker
+session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE calendar=$FEDORA_CALENDAR_MODE xwayland=$FEDORA_NESTED_XWAYLAND android_apps=$FEDORA_ANDROID_APPS_MODE scope=$FEDORA_ANDROID_APPS_SCOPE keyboard=$FEDORA_KEYBOARD_MODE"
+configure_search_mode
+disable_unsupported_system_integrations
+sync_android_app_desktops
 
 start_optional() {
   local name="$1"
@@ -390,8 +949,13 @@ start_optional() {
   child_pids+=("$child_pid")
   if [[ "$name" == pipewire ]]; then
     pipewire_pid="$child_pid"
-    printf '%s\n' "$child_pid" > "$pipewire_pid_file"
-    chmod 600 "$pipewire_pid_file" 2>/dev/null || true
+    if ! atomic_session_write "$pipewire_pid_file" 600 <<< "$child_pid"; then
+      session_log "ERROR: could not record the Fedora PipeWire PID safely"
+      kill "$child_pid" 2>/dev/null || true
+      wait "$child_pid" 2>/dev/null || true
+      pipewire_pid=""
+      return 1
+    fi
   fi
 }
 
@@ -406,7 +970,8 @@ pipewire_socket_ready() {
   # Mutter Devkit calls pw_context_connect() on the normal native server, not
   # the manager endpoint. A manager socket alone is not a usable compositor
   # transport and was the source of a false "ready" result.
-  [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0" ]]
+  [[ -S "$FEDORA_SESSION_RUNTIME/pipewire-0" \
+    && ! -L "$FEDORA_SESSION_RUNTIME/pipewire-0" ]]
 }
 
 start_minimal_pipewire_for_devkit() {
@@ -456,6 +1021,11 @@ start_minimal_pipewire_for_devkit() {
 pipewire_client_probe() {
   command -v pw-cli >/dev/null 2>&1 || return 1
   local probe_log="$FEDORA_SESSION_RUNTIME/pipewire-probe.log"
+  session_path_parents_safe "$probe_log" || return 1
+  if [[ -L "$probe_log" || ( -e "$probe_log" && ! -f "$probe_log" ) ]]; then
+    session_log "ERROR: refusing unsafe PipeWire probe log: $probe_log"
+    return 1
+  fi
   : > "$probe_log"
   if command -v timeout >/dev/null 2>&1; then
     timeout 4 env \
@@ -495,7 +1065,7 @@ wait_for_pipewire() {
         return 0
       fi
     fi
-    if ! kill -0 "$pipewire_pid" 2>/dev/null; then
+    if ! process_is_live "$pipewire_pid"; then
       session_log "PipeWire exited before accepting native clients; see $FEDORA_SESSION_RUNTIME/pipewire-probe.log"
       return 1
     fi
@@ -649,17 +1219,19 @@ wait_for_nested_socket() {
   local display_name=""
   local candidate
   while (( tries < 100 )); do
-    if [[ -n "$process_pid" ]] && ! kill -0 "$process_pid" 2>/dev/null; then
+    if [[ -n "$process_pid" ]] && ! process_is_live "$process_pid"; then
       return 1
     fi
     display_name="$(grep -Eo 'wayland-[0-9]+' "$FEDORA_SESSION_LOG" | tail -n 1 || true)"
-    if [[ -n "$display_name" && -S "$FEDORA_SESSION_RUNTIME/$display_name" ]] \
+    if [[ -n "$display_name" \
+      && -S "$FEDORA_SESSION_RUNTIME/$display_name" \
+      && ! -L "$FEDORA_SESSION_RUNTIME/$display_name" ]] \
       && ! grep -Fxq "$display_name" <<< "$before"; then
       printf '%s\n' "$display_name"
       return 0
     fi
     for candidate in "$FEDORA_SESSION_RUNTIME"/wayland-*; do
-      [[ -S "$candidate" ]] || continue
+      [[ -S "$candidate" && ! -L "$candidate" ]] || continue
       display_name="${candidate##*/}"
       if ! grep -Fxq "$display_name" <<< "$before"; then
         printf '%s\n' "$display_name"
@@ -674,21 +1246,70 @@ wait_for_nested_socket() {
 
 process_ids_by_name() {
   local process_name="$1"
-  local process_dir process_pid process_comm
+  local process_dir process_pid process_comm process_command process_match
+  local seen_pids=$'\n'
 
   if command -v pgrep >/dev/null 2>&1; then
-    pgrep -x "$process_name" 2>/dev/null || true
-    return 0
+    local pgrep_output=""
+    pgrep_output="$(pgrep -x "$process_name" 2>/dev/null || true)"
+    if [[ -n "$pgrep_output" ]]; then
+      while read -r process_pid; do
+        [[ "$process_pid" =~ ^[0-9]+$ ]] || continue
+        case "$seen_pids" in
+          *$'\n'"$process_pid"$'\n'*) continue ;;
+        esac
+        printf '%s\n' "$process_pid"
+        seen_pids+="$process_pid"$'\n'
+      done <<< "$pgrep_output"
+    fi
   fi
   # procps/pgrep is normally pulled in by Fedora GNOME, but keep the viewer
-  # health check useful on a trimmed guest as well.
+  # health check useful on a trimmed guest as well. The Fedora integration
+  # shim is a shell script at the exact /usr/libexec/mutter-devkit path, so its
+  # /proc comm value is not guaranteed to remain `mutter-devkit` on every
+  # kernel. Inspect only the command line for this one known Fedora binary;
+  # never broaden this helper into a general process search.
   for process_dir in /proc/[0-9]*; do
     [[ -r "$process_dir/comm" ]] || continue
     process_pid="${process_dir##*/}"
     process_comm="$(<"$process_dir/comm")" || continue
-    [[ "$process_comm" == "$process_name" ]] || continue
+    process_match=0
+    if [[ "$process_comm" == "$process_name" ]]; then
+      process_match=1
+    elif [[ "$process_name" == mutter-devkit && -r "$process_dir/cmdline" ]]; then
+      process_command="$(tr '\0' ' ' < "$process_dir/cmdline" 2>/dev/null || true)"
+      case "$process_command" in
+        */usr/libexec/mutter-devkit*|*mutter-devkit.real*) process_match=1 ;;
+      esac
+    fi
+    (( process_match )) || continue
+    case "$seen_pids" in
+      *$'\n'"$process_pid"$'\n'*) continue ;;
+    esac
     printf '%s\n' "$process_pid"
+    seen_pids+="$process_pid"$'\n'
   done
+}
+
+report_devkit_evidence() {
+  local viewer_pids="" viewer_pid environment
+  viewer_pids="$(process_ids_by_name mutter-devkit || true)"
+  session_log "Devkit failure evidence: mutter-devkit PIDs=${viewer_pids:-none}; Wayland sockets=$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null | tr '\n' ' ' || true)"
+  while read -r viewer_pid; do
+    [[ "$viewer_pid" =~ ^[0-9]+$ ]] || continue
+    if [[ -r "/proc/$viewer_pid/environ" ]]; then
+      environment="$(tr '\0' '\n' < "/proc/$viewer_pid/environ" 2>/dev/null \
+        | grep -E '^(DISPLAY|GDK_BACKEND|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PIPEWIRE_CORE)=' \
+        | tr '\n' ' ' || true)"
+    else
+      environment=unavailable
+    fi
+    session_log "mutter-devkit[$viewer_pid] filtered environment: ${environment:-unavailable}"
+  done <<< "$viewer_pids"
+  if [[ -r "$FEDORA_SESSION_RUNTIME/pipewire-probe.log" ]]; then
+    session_log "Recent PipeWire native probe output:"
+    tail -n 30 "$FEDORA_SESSION_RUNTIME/pipewire-probe.log" >> "$FEDORA_SESSION_LOG" 2>/dev/null || true
+  fi
 }
 
 new_process_pid() {
@@ -706,18 +1327,34 @@ new_process_pid() {
   return 1
 }
 
+wait_for_stable_process() {
+  local process_pid="$1"
+  local checks="${2:-12}"
+  local check=0
+
+  [[ "$process_pid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$checks" =~ ^[0-9]+$ ]] || return 64
+  while (( check < checks )); do
+    process_is_live "$process_pid" || return 1
+    sleep 0.1
+    check=$((check + 1))
+  done
+  process_is_live "$process_pid"
+}
+
 wait_for_devkit_viewer() {
   local previous_pids="$1"
   local shell_pid="$2"
+  local max_tries="${3:-100}"
   local tries=0
   local viewer_pid=""
 
-  while (( tries < 100 )); do
-    if ! kill -0 "$shell_pid" 2>/dev/null; then
+  while (( tries < max_tries )); do
+    if ! process_is_live "$shell_pid"; then
       return 1
     fi
     viewer_pid="$(new_process_pid mutter-devkit "$previous_pids" || true)"
-    if [[ "$viewer_pid" =~ ^[0-9]+$ ]] && kill -0 "$viewer_pid" 2>/dev/null; then
+    if [[ "$viewer_pid" =~ ^[0-9]+$ ]] && wait_for_stable_process "$viewer_pid" 12; then
       printf '%s\n' "$viewer_pid"
       return 0
     fi
@@ -728,10 +1365,12 @@ wait_for_devkit_viewer() {
 }
 
 mutter_devkit_path() {
-  if [[ -x /usr/libexec/mutter-devkit ]]; then
+  # GNOME's MetaMdk launcher uses MUTTER_LIBEXECDIR/mutter-devkit, and the
+  # Fedora package installs that exact path. Do not accept an unrelated PATH
+  # executable: the activation shim and the saved RPM binary must refer to
+  # the same compositor component.
+  if [[ -x /usr/libexec/mutter-devkit && ! -L /usr/libexec/mutter-devkit ]]; then
     printf '%s\n' /usr/libexec/mutter-devkit
-  elif command -v mutter-devkit >/dev/null 2>&1; then
-    command -v mutter-devkit
   else
     return 1
   fi
@@ -786,8 +1425,12 @@ run_wayland_devkit() {
   fi
 
   local before before_viewer shell_pid nested_display shell_rc killed
-  local viewer_pid saved_gdk_backend saved_wayland_display
+  local viewer_pid saved_wayland_display viewer_wait_tries
+  local viewer_gdk_backend viewer_wayland_display
   local devkit_backend="$FEDORA_DEVKIT_GDK_BACKEND"
+  local devkit_viewer_timeout="${FEDORA_DEVKIT_VIEWER_TIMEOUT:-15}"
+  [[ "$devkit_viewer_timeout" =~ ^[1-9][0-9]?$ ]] || devkit_viewer_timeout=15
+  viewer_wait_tries=$((devkit_viewer_timeout * 10))
   before="$(find "$FEDORA_SESSION_RUNTIME" -maxdepth 1 -type s -name 'wayland-*' -exec basename {} \; 2>/dev/null || true)"
   before_viewer="$(process_ids_by_name mutter-devkit)"
   session_log "Starting GNOME Shell Wayland through Mutter Devkit on outer DISPLAY=$DISPLAY"
@@ -806,14 +1449,19 @@ run_wayland_devkit() {
     export MUTTER_DEBUG_DUMMY_MODE_SPECS="$FEDORA_NESTED_MODE_SPECS"
   fi
 
-  saved_gdk_backend="${GDK_BACKEND:-}"
   saved_wayland_display="${WAYLAND_DISPLAY:-}"
   case "$devkit_backend" in
     auto|x11)
-      # Termux:X11 is the outer transport. Force only the Devkit GTK viewer to
-      # use it; leaving the parent at wayland,x11 can make GTK choose the new
-      # nested socket after Mutter publishes it, which is a self-connection.
-      export GDK_BACKEND=x11
+      # Termux:X11 is the outer transport. The GTK viewer needs X11, but the
+      # GNOME Shell process itself must remain a Wayland client. Previously we
+      # exported GDK_BACKEND=x11 here and Shell later attempted to initialize
+      # its X11 services, which made a valid nested compositor look like a
+      # compositor crash. Pass X11 only to the directly spawned GTK viewer and
+      # to helper processes through the private activation environment.
+      viewer_gdk_backend=x11
+      viewer_wayland_display=""
+      export FEDORA_DEVKIT_VIEWER_GDK_BACKEND="$viewer_gdk_backend"
+      export GDK_BACKEND=wayland
       unset WAYLAND_DISPLAY
       session_log "Mutter Devkit viewer backend: X11 ($DISPLAY)"
       ;;
@@ -822,7 +1470,11 @@ run_wayland_devkit() {
         session_log "FEDORA_DEVKIT_GDK_BACKEND=wayland requested, but no outer WAYLAND_DISPLAY exists"
         return 1
       fi
+      viewer_gdk_backend=wayland
+      viewer_wayland_display="$saved_wayland_display"
+      export FEDORA_DEVKIT_VIEWER_GDK_BACKEND="$viewer_gdk_backend"
       export GDK_BACKEND=wayland
+      export WAYLAND_DISPLAY="$saved_wayland_display"
       session_log "Mutter Devkit viewer backend: outer Wayland ($saved_wayland_display)"
       ;;
     *)
@@ -830,14 +1482,21 @@ run_wayland_devkit() {
       return 1
       ;;
   esac
+  # MetaMdk starts mutter-devkit directly. The viewer receives its GDK backend
+  # through the inherited FEDORA_DEVKIT_VIEWER_GDK_BACKEND variable consumed by
+  # the Fedora-only shim; this is separate from GNOME Shell's GDK_BACKEND. The
+  # private activation environment remains useful for GNOME helpers and
+  # compatibility services.
+  update_dbus_activation_environment "$viewer_gdk_backend" "$viewer_wayland_display"
   gnome-shell "${shell_args[@]}" >> "$FEDORA_SESSION_LOG" 2>&1 &
   shell_pid="$!"
   child_pids+=("$shell_pid")
 
   if ! nested_display="$(wait_for_nested_socket "$before" "$shell_pid")"; then
     session_log "GNOME Shell Devkit did not publish a Wayland socket (viewer: $devkit_path)"
+    report_devkit_evidence
     killed=0
-    if kill -0 "$shell_pid" 2>/dev/null; then
+    if process_is_live "$shell_pid"; then
       kill "$shell_pid" 2>/dev/null || true
       killed=1
     fi
@@ -849,26 +1508,38 @@ run_wayland_devkit() {
     fi
     return 1
   fi
-  if ! viewer_pid="$(wait_for_devkit_viewer "$before_viewer" "$shell_pid")"; then
-    session_log "Mutter Devkit did not keep a GTK viewer alive; refusing to report a black/hidden session as ready"
-    if kill -0 "$shell_pid" 2>/dev/null; then
+  # MetaMdk starts the official GTK viewer directly. The Fedora-only shim at
+  # /usr/libexec/mutter-devkit waits for the compositor-owned
+  # org.gnome.Mutter.Devkit Env property before executing the RPM binary. A
+  # standalone viewer cannot create that launch environment. If the viewer
+  # cannot stay alive (for example while the outer Termux:X11 Activity is not
+  # actually visible), report an ordinary transport failure so the dispatcher
+  # can try the official nested Wayland compositor path below. Never report a
+  # shell-only process as a ready desktop.
+  viewer_pid="$(wait_for_devkit_viewer "$before_viewer" "$shell_pid" "$viewer_wait_tries" || true)"
+  if [[ "$viewer_pid" =~ ^[0-9]+$ ]] && ! wait_for_stable_process "$viewer_pid" 8; then
+    session_log "Mutter Devkit viewer disappeared during readiness (PID $viewer_pid)"
+    viewer_pid=""
+  fi
+  if [[ ! "$viewer_pid" =~ ^[0-9]+$ ]] || ! process_is_live "$viewer_pid"; then
+    session_log "Mutter Devkit did not keep the official GTK viewer alive; refusing to report a black/hidden session as ready"
+    session_log "The compositor-owned viewer environment was unavailable; trying official nested Wayland as a bounded fallback"
+    report_devkit_evidence
+    if process_is_live "$shell_pid"; then
       kill "$shell_pid" 2>/dev/null || true
     fi
     shell_rc=0
     wait "$shell_pid" 2>/dev/null || shell_rc=$?
     report_process_exit "GNOME Shell Devkit (viewer unavailable)" "$shell_rc"
-    return 125
+    return 1
   fi
   child_pids+=("$viewer_pid")
 
-  # The viewer was started by Mutter with the forced outer backend. Restore the
-  # nested-client defaults in this supervisor before launching terminals or
-  # settings helpers. The viewer keeps its own inherited environment.
-  if [[ -n "$saved_gdk_backend" ]]; then
-    export GDK_BACKEND="$saved_gdk_backend"
-  else
-    export GDK_BACKEND=wayland,x11
-  fi
+  # The viewer was started by Mutter with the forced outer backend. GNOME Shell
+  # and every helper launched after readiness must use the nested Wayland
+  # display; never restore a caller's possible GDK_BACKEND=x11 here. The
+  # viewer keeps its own inherited X11 environment.
+  export GDK_BACKEND=wayland,x11
   if [[ -n "$saved_wayland_display" ]]; then
     export WAYLAND_DISPLAY="$saved_wayland_display"
   else
@@ -876,22 +1547,35 @@ run_wayland_devkit() {
   fi
   export WAYLAND_DISPLAY="$nested_display"
   export XDG_SESSION_TYPE=wayland
-  {
-    printf 'WAYLAND_DISPLAY=%q\n' "$WAYLAND_DISPLAY"
-    printf 'XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
-    printf 'XDG_SESSION_TYPE=%q\n' "$XDG_SESSION_TYPE"
-    printf 'DISPLAY=%q\n' "$DISPLAY"
-  } > "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
-  chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
+  update_dbus_activation_environment
+  if ! atomic_session_write "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 600 <<EOF
+WAYLAND_DISPLAY=$(printf '%q' "$WAYLAND_DISPLAY")
+XDG_RUNTIME_DIR=$(printf '%q' "$XDG_RUNTIME_DIR")
+XDG_SESSION_TYPE=$(printf '%q' "$XDG_SESSION_TYPE")
+DISPLAY=$(printf '%q' "$DISPLAY")
+FEDORA_KEYBOARD_MODE=$(printf '%q' "$FEDORA_KEYBOARD_MODE")
+EOF
+  then
+    session_log "ERROR: could not publish a safe Fedora Wayland session state"
+    if process_is_live "$shell_pid"; then
+      kill "$shell_pid" 2>/dev/null || true
+    fi
+    wait "$shell_pid" 2>/dev/null || true
+    return 125
+  fi
   session_log "Mutter Devkit viewer is alive (PID $viewer_pid)"
   session_log "Desktop session: Wayland ($WAYLAND_DISPLAY) via Mutter Devkit; transport: X11 ($DISPLAY)"
 
   start_settings_daemon
   start_session_terminal
   shell_rc=0
-  wait "$shell_pid" || shell_rc=$?
+  wait_for_devkit_session "$shell_pid" "$viewer_pid" || shell_rc=$?
   if (( shell_rc != 0 )); then
-    report_process_exit "GNOME Shell Devkit" "$shell_rc"
+    if [[ "$devkit_session_reason" == viewer ]]; then
+      report_process_exit "GNOME Shell Devkit (viewer exited)" "$devkit_shell_rc"
+    else
+      report_process_exit "GNOME Shell Devkit" "$devkit_shell_rc"
+    fi
     return 125
   fi
   return 0
@@ -927,7 +1611,7 @@ run_wayland_nested() {
   if ! nested_display="$(wait_for_nested_socket "$before" "$shell_pid")"; then
     session_log "GNOME Shell did not publish a nested Wayland socket"
     killed=0
-    if kill -0 "$shell_pid" 2>/dev/null; then
+    if process_is_live "$shell_pid"; then
       kill "$shell_pid" 2>/dev/null || true
       killed=1
     fi
@@ -941,13 +1625,20 @@ run_wayland_nested() {
   fi
   export WAYLAND_DISPLAY="$nested_display"
   export XDG_SESSION_TYPE=wayland
-  {
-    printf 'WAYLAND_DISPLAY=%q\n' "$WAYLAND_DISPLAY"
-    printf 'XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
-    printf 'XDG_SESSION_TYPE=%q\n' "$XDG_SESSION_TYPE"
-    printf 'DISPLAY=%q\n' "$DISPLAY"
-  } > "$FEDORA_SESSION_RUNTIME/fedora-session-state.env"
-  chmod 600 "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 2>/dev/null || true
+  atomic_session_write "$FEDORA_SESSION_RUNTIME/fedora-session-state.env" 600 <<EOF || {
+WAYLAND_DISPLAY=$(printf '%q' "$WAYLAND_DISPLAY")
+XDG_RUNTIME_DIR=$(printf '%q' "$XDG_RUNTIME_DIR")
+XDG_SESSION_TYPE=$(printf '%q' "$XDG_SESSION_TYPE")
+DISPLAY=$(printf '%q' "$DISPLAY")
+FEDORA_KEYBOARD_MODE=$(printf '%q' "$FEDORA_KEYBOARD_MODE")
+EOF
+    session_log "ERROR: could not publish a safe Fedora Wayland session state"
+    if process_is_live "$shell_pid"; then
+      kill "$shell_pid" 2>/dev/null || true
+    fi
+    wait "$shell_pid" 2>/dev/null || true
+    return 125
+  }
   session_log "Desktop session: Wayland ($WAYLAND_DISPLAY); transport: X11 ($DISPLAY)"
 
   start_settings_daemon
@@ -959,6 +1650,29 @@ run_wayland_nested() {
     return 125
   fi
   return 0
+}
+
+release_devkit_pipewire_for_nested_fallback() {
+  # The nested GNOME compositor does not use Mutter Devkit's screen-cast
+  # viewer. In the conservative 12-GiB/off-portal profile, release the
+  # short-lived display-only PipeWire server before retrying nested Wayland.
+  # Keep it when audio or portals were explicitly requested because those
+  # callers may still need the native PipeWire endpoint.
+  [[ "$FEDORA_MEMORY_PROFILE" == low ]] || return 0
+  case "$FEDORA_AUDIO_MODE" in
+    off|disabled|none|auto) ;;
+    *) return 0 ;;
+  esac
+  case "$FEDORA_PORTAL_MODE" in
+    off|disabled|none)
+      [[ -n "$pipewire_pid" ]] || return 0
+      session_log "Releasing Devkit-only PipeWire before nested Wayland retry (low memory, audio/portals off)"
+      stop_pipewire_process
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }
 
 run_x11_fallback() {
@@ -999,6 +1713,9 @@ case "$FEDORA_NESTED_MODE" in
     fi
     if (( devkit_rc == 125 )); then
       session_die "GNOME Shell Devkit crashed; see $FEDORA_SESSION_LOG"
+    fi
+    if (( devkit_rc == 1 )); then
+      release_devkit_pipewire_for_nested_fallback
     fi
     if run_wayland_nested; then
       exit 0

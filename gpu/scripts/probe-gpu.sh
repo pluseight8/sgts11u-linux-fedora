@@ -10,8 +10,17 @@ fedora_require_termux
 fedora_require_non_root
 fedora_init_state
 
-report="${1:-$FEDORA_LOG_DIR/gpu-probe-$(date -u +%Y%m%dT%H%M%SZ).txt}"
-mkdir -p "$(dirname -- "$report")"
+report="${1:-$FEDORA_LOG_DIR/gpu-probe-$(date -u +%Y%m%dT%H%M%SZ)-$$.txt}"
+report_parent="${report%/*}"
+[[ -n "$report_parent" ]] || report_parent=/
+fedora_prepare_directories "$report_parent" || {
+  fedora_die "Could not prepare the GPU report directory: $report_parent"
+  exit 1
+}
+fedora_report_path_is_safe "$report" || {
+  fedora_die "Refusing an unsafe GPU report path: $report"
+  exit 1
+}
 umask 077
 
 capture() {

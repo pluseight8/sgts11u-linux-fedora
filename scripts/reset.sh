@@ -39,8 +39,19 @@ if ! fedora_confirm "Reset Fedora container '$FEDORA_CONTAINER'? All data inside
   exit 1
 fi
 
+stop_script="$FEDORA_INSTALL_ROOT/scripts/stop.sh"
+if [[ -x "$stop_script" && ! -L "$stop_script" ]]; then
+  if ! bash "$stop_script" --yes; then
+    fedora_die "Could not stop Fedora Shell cleanly; refusing destructive reset."
+    exit 1
+  fi
+else
+  fedora_warn "Installed stop helper is unavailable; stopping recorded project transports directly."
+  fedora_stop_owned_transports
+fi
 if fedora_container_running; then
-  "$FEDORA_ENTRY_DIR/stop.sh" --yes
+  fedora_die "Fedora container '$FEDORA_CONTAINER' is still running; refusing destructive reset."
+  exit 1
 fi
 if (( MAKE_BACKUP )); then
   "$FEDORA_ENTRY_DIR/backup.sh" --yes
