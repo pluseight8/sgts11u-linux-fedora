@@ -10,12 +10,14 @@ redacted diagnostics-файла нет, поэтому факты из конс�
 `UNSUPPORTED`, `UNTESTED`.
 
 Подробный разбор причин чёрного экрана, границ Android-интеграции и
-проверенных источников находится в [AUDIT.md](AUDIT.md). Эта рабочая копия ещё
-не опубликована в Git remote и не установлена на планшет после последних
-правок.
+проверенных источников находится в [AUDIT.md](AUDIT.md). Последняя правка
+добавляет Fedora-local system-bus compatibility endpoint для GNOME 50.
+Статические и локальные регрессионные проверки пройдены; визуальная
+приёмка на планшете остаётся обязательной.
 
-Последний аудит журнала показал не ошибку установки Fedora, а потерю
-`mutter-devkit` после публикации nested Wayland-сокета. Supervisor теперь
+Последний аудит журнала показал, что текущий чёрный экран вызван не потерей
+viewer, а `gnome-shell` SIGABRT в `TimeLimitsManager`: PRoot не предоставлял
+`Gio.DBus.system`. Supervisor теперь
 проверяет живой viewer, сохраняет состояние PipeWire и runtime-сокетов в full
 diagnostics и не объявляет чёрную/невидимую сессию успешной. Для гонки запуска
 добавлен обратимый Fedora-only shim на точном пути
@@ -35,10 +37,10 @@ policy, One UI и системные процессы не изменяются.
 | Component | Method | Status | Evidence / next test |
 | --- | --- | --- | --- |
 | Fedora ARM64 | official `fedora:44`, PRoot-Distro | WORKING | user log: image installed and Fedora package transaction completed; rerun `diagnostics.sh --fedora` after updates |
-| GNOME Shell | Fedora package, nested session | PARTIAL | user log: `gnome-shell --wayland --devkit` publishes `wayland-0`, but visible output is black; no successful visual acceptance yet |
+| GNOME Shell | Fedora package, nested session | PARTIAL | previous user log: `gnome-shell --wayland --devkit` published `wayland-0` but aborted in `TimeLimitsManager`; compatibility-bus fix awaits device retest |
 | Mutter | nested Wayland compositor | PARTIAL | user log: Mutter Devkit starts, creates Wayland socket and surfaceless renderer; verify visible frame |
 | GNOME apps | Fedora RPMs | PARTIAL | user log: Ptyxis starts; desktop surface remains black |
-| D-Bus session | `dbus-run-session` | PARTIAL | process setup exists; inspect session bus |
+| D-Bus session/system compatibility | `dbus-run-session` + Fedora-local endpoint | PARTIAL | session bus exists; new system-bus compatibility endpoint awaits device retest |
 | PipeWire | user process | UNTESTED | `pw-cli info 0`, audio test |
 | WirePlumber | user process | UNTESTED | process/log check |
 | xdg portals | user process | PARTIAL | `/dev/fuse` denied under Android; use `FEDORA_PORTAL_MODE=off`, then test file chooser separately |

@@ -329,16 +329,30 @@ if ! grep -Fq -- '--no-x11' "$root/fedora/gnome/fedora-session" \
   status=1
 fi
 if ! grep -Fq 'DBUS_SYSTEM_BUS_ADDRESS' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'FEDORA_SYSTEM_BUS_MODE' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'start_private_system_bus' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'private_system_bus_process_alive' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'dbus-system-compat.conf' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'system-bus.pid' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'no privileged service activation' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'GIO_USE_VFS' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'portals_disabled_for_bus' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'build_filtered_dbus_service_dir' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'standard_session_servicedirs' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq '<servicedir>' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'dbus-services' "$root/fedora/gnome/fedora-session" \
+  || ! grep -Fq 'No standard_session_servicedirs/servicedir/include' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'org.freedesktop.portal' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq 'suppressed optional service entries' "$root/fedora/gnome/fedora-session" \
   || ! grep -Fq '<allow own="*"/>' "$root/fedora/gnome/fedora-session"; then
   printf '%s\n' 'PRoot D-Bus/GVFS compatibility guards are missing' >&2
+  status=1
+fi
+if ! grep -Fq 'FEDORA_SYSTEM_BUS_MODE' "$root/scripts/lib/common.sh" \
+  || ! grep -Fq 'FEDORA_SYSTEM_BUS_MODE=$FEDORA_SYSTEM_BUS_MODE' "$root/scripts/start.sh" \
+  || ! grep -Fq 'FEDORA_SYSTEM_BUS_MODE=private' "$root/scripts/linux-mode.sh" \
+  || ! grep -Fq 'system_bus_mode=' "$root/scripts/diagnostics.sh"; then
+  printf '%s\n' 'system-bus compatibility mode is not propagated/diagnosed consistently' >&2
   status=1
 fi
 if ! grep -Fq 'dbus-update-activation-environment' "$root/fedora/gnome/fedora-session" \

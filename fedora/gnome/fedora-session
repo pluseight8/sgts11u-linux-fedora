@@ -14,6 +14,12 @@ FEDORA_DEVKIT_GDK_BACKEND="${FEDORA_DEVKIT_GDK_BACKEND:-x11}"
 FEDORA_DEVKIT_PIPEWIRE="${FEDORA_DEVKIT_PIPEWIRE:-auto}"
 FEDORA_DEVKIT_PIPEWIRE_CONFIG="${FEDORA_DEVKIT_PIPEWIRE_CONFIG:-/etc/fedora-shell/pipewire-devkit.conf}"
 FEDORA_DEVKIT_DEBUG="${FEDORA_DEVKIT_DEBUG:-0}"
+# GNOME 50 constructs TimeLimitsManager unconditionally and opens Gio.DBus.system
+# during shell startup. A PRoot guest has no Android/system bus, so provide a
+# Fedora-local compatibility endpoint instead of letting that connection abort
+# the shell. This is deliberately not an Android bus alias and has no service
+# activation directories.
+FEDORA_SYSTEM_BUS_MODE="${FEDORA_SYSTEM_BUS_MODE:-private}"
 FEDORA_SYSTEMD_MARKER_MASKED="${FEDORA_SYSTEMD_MARKER_MASKED:-0}"
 FEDORA_LINUX_MODE_STOP_REQUEST="${FEDORA_LINUX_MODE_STOP_REQUEST:-}"
 FEDORA_ALLOW_X11="${FEDORA_ALLOW_X11:-0}"
@@ -87,9 +93,9 @@ touch "$FEDORA_SESSION_LOG"
 # PRoot guest has no systemd PID 1. GNOME Shell uses this marker (rather than
 # checking PID 1) to decide whether to instantiate its systemd LoginManager.
 # If the marker is stale, Shell then asks the private session bus for
-# org.freedesktop.login1 and can abort during TimeLimitsManager startup. Hide
-# only this exact marker for the lifetime of this session; never alter Android
-# /run or a real systemd installation.
+# org.freedesktop.login1 on the system bus and can abort during TimeLimitsManager
+# startup if that bus is absent. Hide only this exact marker for the lifetime of
+# this session; never alter Android /run or a real systemd installation.
 systemd_marker_hidden="${FEDORA_SYSTEMD_MARKER_HIDDEN:-0}"
 systemd_marker_backup="$FEDORA_SESSION_RUNTIME/systemd-seats-marker"
 local_settings_backup="$FEDORA_SESSION_RUNTIME/fedora-local-settings.backup"
@@ -254,6 +260,165 @@ atomic_session_write() {
   mv -f -- "$temporary" "$destination"
   [[ -f "$destination" && ! -L "$destination" ]] || return 1
   chmod "$mode" "$destination" 2>/dev/null || true
+}
+
+private_system_bus_process_alive() {
+  local pid="$1"
+  local process_name=""
+  local command_line=""
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  process_is_live "$pid" || return 1
+  [[ -r "/proc/$pid/comm" && -r "/proc/$pid/cmdline" ]] || return 1
+  process_name="$(<"/proc/$pid/comm")"
+  [[ "$process_name" == dbus-daemon ]] || return 1
+  command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$command_line" == *"--config-file=$system_bus_config_path"* ]]
+}
+
+private_system_bus_state_is_safe() {
+  local path
+  for path in "$system_bus_pid_file" "$system_bus_socket" "$system_bus_config_path"; do
+    session_path_parents_safe "$path" || return 1
+    [[ ! -L "$path" ]] || return 1
+  done
+  if [[ -e "$system_bus_pid_file" && ! -f "$system_bus_pid_file" ]] \
+    || [[ -e "$system_bus_config_path" && ! -f "$system_bus_config_path" ]] \
+    || [[ -e "$system_bus_socket" && ! -S "$system_bus_socket" ]]; then
+    return 1
+  fi
+}
+
+remove_stale_private_system_bus_state() {
+  local old_pid=""
+  local tries=0
+
+  private_system_bus_state_is_safe || {
+    session_log "ERROR: refusing unsafe Fedora-private system D-Bus state"
+    return 1
+  }
+  if [[ -r "$system_bus_pid_file" ]]; then
+    old_pid="$(sed -n '1p' "$system_bus_pid_file" 2>/dev/null || true)"
+    if private_system_bus_process_alive "$old_pid"; then
+      session_log "Stopping stale Fedora-private system D-Bus process $old_pid"
+      kill "$old_pid" 2>/dev/null || true
+      while private_system_bus_process_alive "$old_pid" && (( tries < 20 )); do
+        sleep 0.1
+        tries=$((tries + 1))
+      done
+      if private_system_bus_process_alive "$old_pid"; then
+        # The PID was proved to be this project's dbus-daemon by both /proc
+        # comm and its exact project-owned --config-file argument.
+        kill -KILL "$old_pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+  rm -f -- "$system_bus_pid_file" "$system_bus_socket" "$system_bus_config_path"
+}
+
+stop_private_system_bus() {
+  local pid="$system_bus_pid"
+  local tries=0
+
+  if private_system_bus_process_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    while private_system_bus_process_alive "$pid" && (( tries < 20 )); do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+    if private_system_bus_process_alive "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    wait "$pid" 2>/dev/null || true
+  fi
+  system_bus_pid=""
+  if [[ "${DBUS_SYSTEM_BUS_ADDRESS:-}" == "$system_bus_address" ]]; then
+    unset DBUS_SYSTEM_BUS_ADDRESS
+  fi
+  rm -f -- "$system_bus_pid_file" "$system_bus_socket" "$system_bus_config_path"
+}
+
+start_private_system_bus() {
+  case "$FEDORA_SYSTEM_BUS_MODE" in
+    private|auto)
+      ;;
+    *)
+      session_log "ERROR: FEDORA_SYSTEM_BUS_MODE=$FEDORA_SYSTEM_BUS_MODE is unsupported; PRoot GNOME requires the Fedora-private compatibility bus"
+      return 1
+      ;;
+  esac
+
+  command -v dbus-daemon >/dev/null 2>&1 || {
+    session_log "ERROR: dbus-daemon is missing; cannot provide Fedora-private system D-Bus compatibility"
+    return 1
+  }
+  private_system_bus_state_is_safe || {
+    session_log "ERROR: refusing unsafe Fedora-private system D-Bus state"
+    return 1
+  }
+  remove_stale_private_system_bus_state || return 1
+
+  local escaped_socket_path
+  escaped_socket_path="$(printf '%s' "$system_bus_socket" \
+    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  if ! atomic_session_write "$system_bus_config_path" 600 <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:path=$escaped_socket_path</listen>
+  <auth>EXTERNAL</auth>
+  <!-- No standard_session_servicedirs/servicedir/include on purpose. This
+       endpoint only makes Gio.DBus.system connectable; it does not provide
+       logind, PolicyKit, UPower, GDM, RTKit or any other privileged service. -->
+  <policy context="default">
+    <allow user="*"/>
+    <allow send_destination="*"/>
+    <allow send_type="method_call"/>
+    <allow send_type="signal"/>
+    <allow send_requested_reply="true"/>
+    <allow receive_type="method_call"/>
+    <allow receive_type="method_return"/>
+    <allow receive_type="error"/>
+    <allow receive_type="signal"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+  then
+    return 1
+  fi
+
+  system_bus_address="unix:path=$system_bus_socket"
+  dbus-daemon --config-file="$system_bus_config_path" --nofork --nopidfile \
+    >> "$FEDORA_SESSION_LOG" 2>&1 &
+  system_bus_pid="$!"
+  child_pids+=("$system_bus_pid")
+  if ! atomic_session_write "$system_bus_pid_file" 600 <<< "$system_bus_pid"; then
+    session_log "ERROR: could not record the Fedora-private system D-Bus PID safely"
+    return 1
+  fi
+
+  local tries=0
+  while (( tries < 50 )); do
+    if private_system_bus_process_alive "$system_bus_pid" \
+      && [[ -S "$system_bus_socket" && ! -L "$system_bus_socket" ]]; then
+      export DBUS_SYSTEM_BUS_ADDRESS="$system_bus_address"
+      session_log "Fedora-private system D-Bus compatibility bus is ready: $system_bus_address (no privileged service activation)"
+      return 0
+    fi
+    if ! process_is_live "$system_bus_pid"; then
+      session_log "ERROR: Fedora-private system D-Bus exited before becoming ready"
+      return 1
+    fi
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  session_log "ERROR: Fedora-private system D-Bus did not become ready within 5 seconds"
+  return 1
 }
 
 configure_memory_profile() {
@@ -534,7 +699,8 @@ build_filtered_dbus_service_dir() {
   done
 
   if (( suppressed > 0 )); then
-    session_log "Private D-Bus catalog: suppressed $suppressed optional service entries; copied $copied entries (${suppressed_names[*]})"
+    session_log "Private D-Bus catalog: suppressed $suppressed optional service entries; copied $copied entries"
+    session_log "Suppressed service files: ${suppressed_names[*]}"
   else
     session_log "Private D-Bus catalog: no optional service entries matched; copied $copied entries"
   fi
@@ -587,6 +753,16 @@ EOF
 # exits. Re-exec keeps the inside-bus path easy to inspect in logs.
 if [[ "${1:-}" != --inside-dbus ]]; then
   command -v dbus-run-session >/dev/null 2>&1 || session_die "dbus-run-session is missing"
+  case "$FEDORA_SYSTEM_BUS_MODE" in
+    private|auto)
+      # Never inherit a caller/host system-bus address. In this project the
+      # only supported system-bus endpoint is created inside Fedora/PRoot.
+      unset DBUS_SYSTEM_BUS_ADDRESS
+      ;;
+    *)
+      session_die "FEDORA_SYSTEM_BUS_MODE=$FEDORA_SYSTEM_BUS_MODE is unsupported; use private"
+      ;;
+  esac
   export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
   dbus_args=()
   if session_bus_overrides_needed; then
@@ -610,16 +786,10 @@ fi
 shift
 
 # Do not alias the private session bus to DBus.system. They have different
-# security contracts; aliasing makes GNOME treat optional session services as
-# logind/PolicyKit and produces AccessDenied/ServiceUnknown cascades. With the
-# stale systemd marker hidden above, GNOME selects its built-in dummy login
-# manager and optional system-bus calls fail harmlessly.
-if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
-  session_log "Using caller-provided system D-Bus address"
-else
-  unset DBUS_SYSTEM_BUS_ADDRESS
-  session_log "No system D-Bus is available; GNOME system-service integration is disabled in PRoot"
-fi
+# security contracts. A project-owned compatibility bus is started below so
+# GNOME 50's unconditional Gio.DBus.system connection can succeed without
+# exposing Android's bus or pretending to provide privileged services.
+unset DBUS_SYSTEM_BUS_ADDRESS
 
 export DISPLAY="$FEDORA_DISPLAY"
 export XDG_RUNTIME_DIR="$FEDORA_SESSION_RUNTIME"
@@ -682,6 +852,7 @@ update_dbus_activation_environment() {
     "PIPEWIRE_RUNTIME_DIR=$PIPEWIRE_RUNTIME_DIR"
     "PIPEWIRE_REMOTE=$PIPEWIRE_REMOTE"
     "PIPEWIRE_CORE=$PIPEWIRE_CORE"
+    "DBUS_SYSTEM_BUS_ADDRESS=${DBUS_SYSTEM_BUS_ADDRESS:-}"
     "FEDORA_KEYBOARD_MODE=$FEDORA_KEYBOARD_MODE"
     "XKB_CONFIG_ROOT=${XKB_CONFIG_ROOT:-}"
   )
@@ -764,9 +935,10 @@ configure_search_mode() {
 disable_unsupported_system_integrations() {
   # GNOME 50 creates TimeLimitsManager during Shell startup. If the Fedora
   # guest has the screen-time history key enabled, that manager asks for a
-  # systemd/logind user proxy and can tear down an otherwise healthy nested
-  # session when PRoot has no system D-Bus. This is a Fedora-local setting;
-  # Android Digital Wellbeing and Android parental controls are not touched.
+  # systemd/logind user proxy. PRoot has no logind service even though the
+  # Fedora-local compatibility bus makes Gio.DBus.system connectable. This is a
+  # Fedora-local setting; Android Digital Wellbeing and Android parental
+  # controls are not touched.
   if command -v gsettings >/dev/null 2>&1; then
     backup_fedora_settings
     if gsettings set org.gnome.desktop.screen-time-limits history-enabled false \
@@ -832,6 +1004,11 @@ sync_android_app_desktops() {
 }
 
 child_pids=()
+system_bus_pid=""
+system_bus_socket="$FEDORA_SESSION_RUNTIME/system-bus"
+system_bus_config_path="$FEDORA_SESSION_RUNTIME/dbus-system-compat.conf"
+system_bus_pid_file="$FEDORA_SESSION_RUNTIME/system-bus.pid"
+system_bus_address=""
 pipewire_pid=""
 pipewire_config_path=""
 pipewire_pid_file="$FEDORA_SESSION_RUNTIME/pipewire.pid"
@@ -896,6 +1073,7 @@ stop_pipewire_process() {
 
 cleanup() {
   local pid tries
+  stop_private_system_bus
   for pid in "${child_pids[@]:-}"; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && process_is_live "$pid"; then
       kill "$pid" 2>/dev/null || true
@@ -927,6 +1105,9 @@ trap 'exit 143' TERM
 # changing Fedora-local dconf values. A failure in optional setup must never
 # leave those reversible guest-only changes behind.
 hide_stale_systemd_marker
+if ! start_private_system_bus; then
+  session_die "Fedora-private system D-Bus compatibility bus is unavailable; see $FEDORA_SESSION_LOG"
+fi
 session_log "Memory profile: $FEDORA_MEMORY_PROFILE; audio=$FEDORA_AUDIO_MODE settings=$FEDORA_SETTINGS_DAEMON terminal=$FEDORA_LAUNCH_TERMINAL keyring=$FEDORA_KEYRING_MODE search=$FEDORA_SEARCH_MODE calendar=$FEDORA_CALENDAR_MODE xwayland=$FEDORA_NESTED_XWAYLAND android_apps=$FEDORA_ANDROID_APPS_MODE scope=$FEDORA_ANDROID_APPS_SCOPE keyboard=$FEDORA_KEYBOARD_MODE"
 configure_search_mode
 disable_unsupported_system_integrations
@@ -1299,7 +1480,7 @@ report_devkit_evidence() {
     [[ "$viewer_pid" =~ ^[0-9]+$ ]] || continue
     if [[ -r "/proc/$viewer_pid/environ" ]]; then
       environment="$(tr '\0' '\n' < "/proc/$viewer_pid/environ" 2>/dev/null \
-        | grep -E '^(DISPLAY|GDK_BACKEND|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PIPEWIRE_CORE)=' \
+        | grep -E '^(DISPLAY|GDK_BACKEND|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PIPEWIRE_CORE|DBUS_SYSTEM_BUS_ADDRESS)=' \
         | tr '\n' ' ' || true)"
     else
       environment=unavailable

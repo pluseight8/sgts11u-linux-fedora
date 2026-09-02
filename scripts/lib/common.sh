@@ -133,6 +133,7 @@ for fedora_config_variable in \
   FEDORA_DEVKIT_PIPEWIRE \
   FEDORA_DEVKIT_PIPEWIRE_CONFIG \
   FEDORA_DEVKIT_DEBUG \
+  FEDORA_SYSTEM_BUS_MODE \
   FEDORA_TERMUX_X11_LEGACY_DRAWING \
   FEDORA_TERMUX_X11_FORCE_BGRA \
   FEDORA_TERMUX_X11_AUTO_OPEN \
@@ -199,6 +200,9 @@ unset fedora_config_override_names fedora_config_override_values \
 : "${FEDORA_DEVKIT_PIPEWIRE:=auto}"
 : "${FEDORA_DEVKIT_PIPEWIRE_CONFIG:=/etc/fedora-shell/pipewire-devkit.conf}"
 : "${FEDORA_DEVKIT_DEBUG:=0}"
+# GNOME 50 needs Gio.DBus.system during startup. `private` is a Fedora/PRoot
+# compatibility bus, never an alias to Android's system bus.
+: "${FEDORA_SYSTEM_BUS_MODE:=private}"
 : "${FEDORA_TERMUX_X11_LEGACY_DRAWING:=1}"
 : "${FEDORA_TERMUX_X11_FORCE_BGRA:=0}"
 : "${FEDORA_TERMUX_X11_AUTO_OPEN:=auto}"

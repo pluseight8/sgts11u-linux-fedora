@@ -166,8 +166,10 @@ bash ./scripts/diagnostics.sh --full
    GNOME 50 также может включать Fedora-local screen-time history. В PRoot
    нет systemd/logind, поэтому перед запуском Shell эта совместимость
    отключается только в Fedora dconf; Android Digital Wellbeing и Android
-   parental controls не затрагиваются. Сообщения о `org.freedesktop.login1`
-   после этого не должны быть причиной падения сессии.
+   parental controls не затрагиваются. Fedora-local system-bus compatibility
+   endpoint предотвращает startup abort при создании `Gio.DBus.system`, но не
+   симулирует `org.freedesktop.login1`; его `ServiceUnknown` после этого
+   ожидаем.
 
    Этот режим рекомендован upstream Termux:X11 для устройств, где обычный
    drawing даёт чёрную поверхность.
@@ -328,12 +330,21 @@ totals, best-effort system/SurfaceFlinger PSS и отдельный `gpu.memoryK
 
 Не запускайте `systemctl` как доказательство исправности. PRoot не даёт
 настоящего PID 1/systemd и cgroups. Используйте `fedora-session`, который
-запускает конкретные user processes и private D-Bus session bus. Приватный bus
-не подменяет system bus и не экспортируется через `DBUS_SYSTEM_BUS_ADDRESS`;
-logind, UPower, RTKit и другие privileged system services по-прежнему
-недоступны. Их предупреждения ожидаемы. Если в guest остался только файл
+запускает конкретные user processes, private D-Bus session bus и отдельный
+Fedora-local system-bus compatibility endpoint. `DBUS_SYSTEM_BUS_ADDRESS`
+указывает только на временный сокет внутри `$FEDORA_SESSION_RUNTIME`; Android
+system bus не наследуется, не подменяется и не изменяется. Compatibility bus не
+имеет service directories, поэтому logind, UPower, RTKit и другие privileged
+system services по-прежнему недоступны, а их `ServiceUnknown` предупреждения
+ожидаемы. Если в guest остался только файл
 `/run/systemd/seats`, supervisor временно прячет именно этот stale marker,
 чтобы GNOME выбрал dummy login manager, и восстанавливает его при выходе.
+
+Для GNOME 50 ошибка `Gjs-CRITICAL ... timeLimitsManager.js` с последующим
+`free(): invalid pointer` означала не нехватку RAM, а необработанную попытку
+открыть отсутствующую system D-Bus шину в PRoot. После обновления в логе должна
+появиться строка `Fedora-private system D-Bus compatibility bus is ready`; при
+этом privileged service names всё равно останутся отсутствующими намеренно.
 
 Сообщение `fuse: failed to open /dev/fuse` относится к document portal:
 Android/PRoot обычно не может предоставить FUSE mount. В

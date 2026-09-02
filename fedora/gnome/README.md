@@ -1,7 +1,8 @@
 # GNOME session
 
 `fedora-session` is a small supervisor for a Fedora userspace running without
-GDM/systemd. It creates a D-Bus session bus, starts an isolated minimal
+GDM/systemd. It creates a D-Bus session bus and a Fedora-local system-bus
+compatibility endpoint, starts an isolated minimal
 PipeWire transport required by the Mutter Devkit viewer, and tries
 `gnome-shell --wayland --devkit` first. WirePlumber and pipewire-pulse are
 optional audio helpers. Desktop portals and Evolution/GOA calendar helpers are
@@ -20,6 +21,13 @@ direct GNOME Shell process remains explicitly Wayland-only; the private D-Bus
 activation environment is used for helper processes and compatibility probes.
 This separation prevents GNOME Shell from trying to initialize its unsupported
 X11 services while the viewer still gets a visible outer surface.
+
+The compatibility system bus is a project-owned Unix socket under the Fedora
+runtime directory. It contains no standard service directories and does not
+alias, forward to or modify Android's system bus. Its only purpose is to make
+`Gio.DBus.system` connectable for GNOME 50 components that initialize that
+object unconditionally; privileged names such as logind, PolicyKit, UPower and
+GDM still correctly return `ServiceUnknown` in PRoot.
 
 GNOME's official Devkit path starts `/usr/libexec/mutter-devkit` directly from
 the compositor; the viewer then reads its nested `WAYLAND_DISPLAY` from the

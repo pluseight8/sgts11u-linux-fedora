@@ -458,6 +458,7 @@ fi
   printf 'devkit_gdk_backend=%s\n' "$FEDORA_DEVKIT_GDK_BACKEND"
   printf 'devkit_pipewire=%s\n' "$FEDORA_DEVKIT_PIPEWIRE"
   printf 'devkit_pipewire_config=%s\n' "$FEDORA_DEVKIT_PIPEWIRE_CONFIG"
+  printf 'system_bus_mode=%s\n' "$FEDORA_SYSTEM_BUS_MODE"
   printf 'devkit_debug=%s\n' "$FEDORA_DEVKIT_DEBUG"
   printf 'redacted=%s\n' "$([[ $REDACT -eq 1 ]] && echo yes || echo no)"
   printf 'state_dir=%s\n' "$FEDORA_STATE_DIR"

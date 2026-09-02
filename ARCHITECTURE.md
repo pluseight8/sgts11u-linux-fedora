@@ -59,10 +59,12 @@ manifest/image metadata, а `VERSIONS.md` не подменяет этот от�
 
 В Fedora ставятся GNOME Shell/Mutter, Mutter Devkit и базовые GNOME applications. GDM, systemd
 PID 1 и kernel-facing services не запускаются. `fedora-session` вручную
-создаёт D-Bus session bus, запускает минимальный PipeWire transport (и только
-при необходимости WirePlumber/PulseAudio) и затем GNOME Shell
-nested. Desktop portals запускаются только если Android/PRoot позволяет открыть
-`/dev/fuse`.
+создаёт D-Bus session bus и Fedora-local system-bus compatibility endpoint без
+service activation, запускает минимальный PipeWire transport (и только при
+необходимости WirePlumber/PulseAudio) и затем GNOME Shell nested. Compatibility
+endpoint нужен GNOME 50 для `Gio.DBus.system`; он не является Android bus alias и
+не предоставляет logind/PolicyKit/UPower/GDM. Desktop portals запускаются только
+если Android/PRoot позволяет открыть `/dev/fuse`.
 
 ## 4. GPU
 

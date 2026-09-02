@@ -116,14 +116,16 @@ install -d -m 0755 /etc/systemd/system
 cat > /etc/fedora-shell/README <<'EOF'
 This Fedora userspace runs under Android + PRoot-Distro.
 systemd is not PID 1 here. Do not use systemctl as a health check.
-fedora-session starts a private D-Bus session bus, an isolated minimal PipeWire
-display transport and GNOME; WirePlumber/pipewire-pulse are optional helpers
-enabled by the audio profile. PRoot cannot provide Android/systemd's system bus,
-so no system-bus alias is created; logind, UPower, RTKit and other privileged system
-services are intentionally unavailable. On startup fedora-session hides only a
-stale guest /run/systemd/seats marker when systemd is not PID 1, allowing GNOME
-to use its dummy login manager; it restores that guest marker on exit. Desktop
-portals are enabled only when their Android/PRoot FUSE prerequisite is usable.
+fedora-session starts a private D-Bus session bus, a Fedora-local system-bus
+compatibility endpoint, an isolated minimal PipeWire display transport and GNOME;
+WirePlumber/pipewire-pulse are optional helpers enabled by the audio profile. The
+compatibility endpoint exists only so GNOME 50's Gio.DBus.system initialization
+does not abort in PRoot. It has no service directories and is not an alias to
+Android/systemd's bus: logind, UPower, RTKit and other privileged system services
+remain unavailable. On startup fedora-session hides only a stale guest
+/run/systemd/seats marker when systemd is not PID 1, allowing GNOME to use its
+dummy login manager; it restores that guest marker on exit. Desktop portals are
+enabled only when their Android/PRoot FUSE prerequisite is usable.
 EOF
 chmod 0644 /etc/fedora-shell/README
 

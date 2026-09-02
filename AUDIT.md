@@ -67,8 +67,14 @@
 
 ### D-Bus, portals и необязательные сервисы
 
-* для Fedora/PRoot используется отдельный private session bus;
-* `DBUS_SYSTEM_BUS_ADDRESS` не подменяется session bus-ом;
+* для Fedora/PRoot используется отдельный private session bus и отдельный
+  project-owned system-bus compatibility endpoint;
+* `DBUS_SYSTEM_BUS_ADDRESS` указывает только на этот Fedora-local endpoint,
+  созданный на время сессии; Android/system bus никогда не наследуется и не
+  подменяется session bus-ом;
+* compatibility endpoint не содержит service directories и не активирует
+  privileged services; он устраняет конкретный GNOME 50 startup abort в
+  `TimeLimitsManager`, сохраняя `ServiceUnknown` для logind/PolicyKit/UPower;
 * при недоступном `/dev/fuse` portals не запускаются автоматически;
 * фильтруется только Fedora-owned activation catalog: Android D-Bus и
   Android SystemUI не затрагиваются;
